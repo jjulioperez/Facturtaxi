@@ -77,6 +77,40 @@ tú la apruebes: verá la pantalla "Cuenta pendiente de aprobación". Para aprob
 La primera vez que ejecutas `0002_approval_gate.sql`, tu propia cuenta (y cualquiera que ya
 existiera) se aprueba automáticamente para no dejarte fuera.
 
+## 7. Generar la app de Android (APK nativo)
+
+La carpeta `android/` (creada con [Capacitor](https://capacitorjs.com)) envuelve la misma web app
+en una app Android nativa instalable.
+
+Necesitas, además de Node:
+
+- **JDK 21** (p.ej. [Temurin 21](https://adoptium.net/temurin/releases/?version=21))
+- **Android SDK** (basta con las *command line tools*, no hace falta Android Studio completo):
+  descarga `commandlinetools-mac-*_latest.zip` desde la
+  [web de Android Studio](https://developer.android.com/studio#command-line-tools-only),
+  descomprímelo, y coloca su contenido en `<sdk>/cmdline-tools/latest/`.
+  Luego instala los paquetes necesarios:
+  ```bash
+  ./sdkmanager --sdk_root=<TU_SDK> "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+  ```
+- Crea `android/local.properties` con: `sdk.dir=<TU_SDK>`
+
+Con eso listo:
+
+```bash
+# 1. Compila la web app para Android y sincroniza los assets nativos
+npm run build:apk
+
+# 2. Compila el APK (queda en android/app/build/outputs/apk/debug/app-debug.apk)
+cd android
+JAVA_HOME=<TU_JDK_21> ./gradlew assembleDebug
+```
+
+El APK de depuración ya está firmado (con una clave de depuración automática) y se puede instalar
+directamente en un móvil Android activando "Instalar apps de orígenes desconocidos". Para publicarla
+en Google Play necesitarías además generar una clave de firma de release
+([guía oficial](https://developer.android.com/studio/publish/app-signing)).
+
 ## Notas legales
 
 - La numeración es correlativa por serie (por defecto, el año) y sin huecos, gestionada de forma
