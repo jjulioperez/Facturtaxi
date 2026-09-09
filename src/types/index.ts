@@ -14,6 +14,7 @@ export interface Profile {
   template_style: TemplateStyle;
   default_iva: number;
   invoice_series_prefix: string;
+  approved: boolean;
   created_at?: string;
 }
 

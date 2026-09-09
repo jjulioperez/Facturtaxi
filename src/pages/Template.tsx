@@ -109,6 +109,7 @@ export default function Template() {
     try {
       const previewProfile: Profile = {
         id: user?.id ?? "preview",
+        approved: true,
         ...form,
         ...images,
       };

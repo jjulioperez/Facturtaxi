@@ -18,7 +18,9 @@ correlativa e historial de facturas descargables.
 2. En **SQL Editor**, pega y ejecuta el contenido de [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql).
    Esto crea las tablas, las políticas de seguridad (RLS), la función de numeración correlativa y
    los buckets de almacenamiento (`branding`, `invoices`).
-3. En **Project Settings → API**, copia la `Project URL` y la `anon public key`.
+3. Ejecuta también [`supabase/migrations/0002_approval_gate.sql`](supabase/migrations/0002_approval_gate.sql)
+   (añade la aprobación manual de cuentas nuevas, ver sección 6 más abajo).
+4. En **Project Settings → API Keys**, copia la `Project URL` y la clave **Publishable** (`anon`/`publishable`).
 
 ## 2. Configurar el login con GitHub (opcional pero recomendado)
 
@@ -62,6 +64,18 @@ npm run dev
    `.p12`/`.pfx` con su contraseña en el paso siguiente (no se guardan en ningún sitio).
 4. Descarga el PDF generado. En **Historial** puedes volver a descargar cualquier factura anterior,
    ordenadas por número correlativo.
+
+## 6. Aprobar cuentas nuevas (tú eres el administrador)
+
+Cualquiera puede registrarse (email o GitHub), pero una cuenta nueva **no puede entrar** hasta que
+tú la apruebes: verá la pantalla "Cuenta pendiente de aprobación". Para aprobar a alguien:
+
+1. En Supabase, ve a **Table Editor → profiles**.
+2. Busca la fila con su email, y cambia la columna `approved` a `true`
+   (o ejecuta en el **SQL Editor**: `update public.profiles set approved = true where email = '...';`).
+
+La primera vez que ejecutas `0002_approval_gate.sql`, tu propia cuenta (y cualquiera que ya
+existiera) se aprueba automáticamente para no dejarte fuera.
 
 ## Notas legales
 
