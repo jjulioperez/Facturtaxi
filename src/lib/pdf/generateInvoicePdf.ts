@@ -223,12 +223,15 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array>
 
   const bodyTop = tableTop - rowHeight;
   const description = invoice.description || "Servicio de transporte (taxi)";
-  page.drawText(truncate(description, 42), {
-    x: colX[0],
-    y: bodyTop - 20,
-    size: 10.5,
-    font: fontRegular,
-    color: rgb(0.15, 0.15, 0.15),
+  const descriptionLines = wrapText(fontRegular, description, 10.5, colX[1] - colX[0] - 10);
+  descriptionLines.forEach((line, i) => {
+    page.drawText(line, {
+      x: colX[0],
+      y: bodyTop - 20 - i * 13,
+      size: 10.5,
+      font: fontRegular,
+      color: rgb(0.15, 0.15, 0.15),
+    });
   });
   page.drawText(formatDate(invoice.service_date), {
     x: colX[1],
@@ -245,15 +248,18 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array>
     color: rgb(0.15, 0.15, 0.15),
   });
 
+  // Si la descripción ocupó más de una línea, el resto del bloque se desplaza hacia abajo.
+  const descriptionExtra = Math.max(0, descriptionLines.length - 1) * 13;
+
   page.drawLine({
-    start: { x: margin, y: bodyTop - 32 },
-    end: { x: pageWidth - margin, y: bodyTop - 32 },
+    start: { x: margin, y: bodyTop - 32 - descriptionExtra },
+    end: { x: pageWidth - margin, y: bodyTop - 32 - descriptionExtra },
     thickness: 0.75,
     color: rgb(0.85, 0.85, 0.85),
   });
 
   // Totales, alineados a la derecha.
-  let totalsY = bodyTop - 56;
+  let totalsY = bodyTop - 56 - descriptionExtra;
   totalsY = drawTotalRow(page, fontRegular, pageWidth, margin, totalsY, "Base imponible", formatCurrency(invoice.base_amount));
   totalsY = drawTotalRow(
     page,
@@ -340,6 +346,51 @@ function truncate(s: string, max: number) {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+/**
+ * Reparte un texto en varias líneas para que quepa dentro de maxWidth (nunca
+ * se pierde contenido). Si una sola palabra (p.ej. un email o una URL sin
+ * espacios) no cabe entera, se corta por caracteres en vez de desbordar.
+ */
+function wrapText(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    if (font.widthOfTextAtSize(word, size) <= maxWidth) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (!current || font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+        current = candidate;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+      continue;
+    }
+
+    // La palabra por sí sola no cabe: se corta por caracteres.
+    if (current) {
+      lines.push(current);
+      current = "";
+    }
+    let chunk = "";
+    for (const ch of word) {
+      const candidate = chunk + ch;
+      if (chunk && font.widthOfTextAtSize(candidate, size) > maxWidth) {
+        lines.push(chunk);
+        chunk = ch;
+      } else {
+        chunk = candidate;
+      }
+    }
+    current = chunk;
+  }
+
+  if (current) lines.push(current);
+  return lines;
+}
+
 function drawTotalRow(
   page: PDFPage,
   font: PDFFont,
@@ -369,8 +420,10 @@ function drawPartyBlock(
   y -= 16;
   for (const line of opts.lines) {
     if (!line) continue;
-    page.drawText(truncate(line, 48), { x: opts.x, y, size: 10.5, font: fontRegular, color: rgb(0.2, 0.2, 0.2) });
-    y -= 15;
+    for (const sub of wrapText(fontRegular, line, 10.5, opts.width)) {
+      page.drawText(sub, { x: opts.x, y, size: 10.5, font: fontRegular, color: rgb(0.2, 0.2, 0.2) });
+      y -= 14;
+    }
   }
   return { y };
 }
