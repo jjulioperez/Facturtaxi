@@ -1,0 +1,509 @@
+import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
+import type { Client, Invoice, Profile } from "../../types";
+
+export interface InvoiceData {
+  profile: Profile;
+  client: Client;
+  invoice: Pick<
+    Invoice,
+    | "series"
+    | "number"
+    | "issue_date"
+    | "service_date"
+    | "description"
+    | "service_origin"
+    | "service_destination"
+    | "service_time"
+    | "tariff_number"
+    | "supplements"
+    | "base_amount"
+    | "iva_rate"
+    | "iva_amount"
+    | "total_amount"
+  >;
+  /** Presente cuando esta factura es una rectificativa de otra anterior. */
+  rectification?: { originalFullNumber: string; reason: string };
+  /**
+   * true cuando este PDF se va a firmar (o ya se ha firmado) con certificado
+   * digital: dibuja un sello visible "firmado electrónicamente" en vez de la
+   * imagen de firma manual. Debe pasarse ANTES de firmar (el contenido
+   * visual forma parte del documento que se firma).
+   */
+  signedWithCertificate?: boolean;
+}
+
+function buildConceptLines(invoice: InvoiceData["invoice"]): string[] {
+  const lines: string[] = [];
+  const hasRoute = Boolean(invoice.service_origin || invoice.service_destination);
+  if (hasRoute) {
+    lines.push([invoice.service_origin, invoice.service_destination].filter(Boolean).join(" - "));
+  } else {
+    lines.push(invoice.description || "Servicio de transporte (taxi)");
+  }
+
+  const meta: string[] = [];
+  if (invoice.service_time) meta.push(`Hora: ${invoice.service_time}`);
+  if (invoice.tariff_number) meta.push(`Tarifa: ${invoice.tariff_number}`);
+  if (meta.length) lines.push(meta.join("   "));
+
+  if (invoice.supplements) lines.push(`Suplementos: ${invoice.supplements}`);
+  if (hasRoute && invoice.description) lines.push(invoice.description);
+
+  return lines;
+}
+
+function hexToRgb(hex: string) {
+  const clean = hex.replace("#", "");
+  const bigint = parseInt(clean.length === 3 ? clean.replace(/(.)/g, "$1$1") : clean, 16);
+  return rgb(((bigint >> 16) & 255) / 255, ((bigint >> 8) & 255) / 255, (bigint & 255) / 255);
+}
+
+function formatCurrency(n: number) {
+  return `${n.toFixed(2)} €`;
+}
+
+function formatDate(iso: string) {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+async function fetchAsBytes(url: string): Promise<ArrayBuffer | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+async function embedImageSmart(doc: PDFDocument, url: string | null | undefined) {
+  if (!url) return null;
+  const bytes = await fetchAsBytes(url);
+  if (!bytes) return null;
+  try {
+    if (/\.png(\?|$)/i.test(url)) return await doc.embedPng(bytes);
+    return await doc.embedJpg(bytes);
+  } catch {
+    try {
+      return await doc.embedPng(bytes);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * Genera el PDF de una factura a partir de la plantilla configurada por el
+ * usuario (logo, datos fiscales, color de acento, sello y firma manual).
+ * Devuelve los bytes del PDF (sin firmar con certificado todavía).
+ */
+export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array> {
+  const { profile, client, invoice, rectification } = data;
+  const accent = hexToRgb(profile.accent_color || "#0d9488");
+  const style = profile.template_style || "clasico";
+  const isModerno = style === "moderno";
+  const isSimple = style === "simple";
+  const extraHeaderLines = rectification ? (rectification.reason ? 2 : 1) : 0;
+
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595.28, 841.89]); // A4
+  const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  const margin = 48;
+  const pageWidth = page.getWidth();
+  let cursorY = page.getHeight() - margin;
+
+  if (isModerno) {
+    // Debe cubrir el logo y las líneas de cabecera (título, número, fecha, y
+    // las líneas extra de rectificativa si las hay); si no, el texto claro
+    // queda ilegible sobre el fondo blanco.
+    const bannerHeight = 120 + extraHeaderLines * 16;
+    page.drawRectangle({ x: 0, y: page.getHeight() - bannerHeight, width: pageWidth, height: bannerHeight, color: accent });
+  }
+
+  const logo = await embedImageSmart(doc, profile.logo_url);
+  if (logo) {
+    const maxW = 130;
+    const maxH = 60;
+    const scale = Math.min(maxW / logo.width, maxH / logo.height, 1);
+    page.drawImage(logo, {
+      x: margin,
+      y: cursorY - logo.height * scale,
+      width: logo.width * scale,
+      height: logo.height * scale,
+    });
+  }
+
+  // Cabecera: título FACTURA + número, alineado a la derecha.
+  const title = rectification ? "FACTURA RECTIFICATIVA" : "FACTURA";
+  const titleSize = rectification ? 15 : 22;
+  const titleColor = isModerno ? rgb(1, 1, 1) : isSimple ? rgb(0.15, 0.15, 0.15) : accent;
+  const titleWidth = fontBold.widthOfTextAtSize(title, titleSize);
+  page.drawText(title, {
+    x: pageWidth - margin - titleWidth,
+    y: cursorY - 20,
+    size: titleSize,
+    font: fontBold,
+    color: titleColor,
+  });
+
+  const fullNumber = `${invoice.series}-${String(invoice.number).padStart(4, "0")}`;
+  const numberLine = `Nº ${fullNumber}`;
+  const numberWidth = fontRegular.widthOfTextAtSize(numberLine, 11);
+  const subtitleColor = isModerno ? rgb(0.95, 0.95, 0.95) : rgb(0.25, 0.25, 0.25);
+  page.drawText(numberLine, {
+    x: pageWidth - margin - numberWidth,
+    y: cursorY - 38,
+    size: 11,
+    font: fontRegular,
+    color: subtitleColor,
+  });
+
+  const dateLine = `Fecha de emisión: ${formatDate(invoice.issue_date)}`;
+  const dateWidth = fontRegular.widthOfTextAtSize(dateLine, 11);
+  page.drawText(dateLine, {
+    x: pageWidth - margin - dateWidth,
+    y: cursorY - 54,
+    size: 11,
+    font: fontRegular,
+    color: subtitleColor,
+  });
+
+  if (rectification) {
+    const rectifyLine = `Rectifica a la factura Nº ${rectification.originalFullNumber}`;
+    const rectifyWidth = fontRegular.widthOfTextAtSize(rectifyLine, 10);
+    page.drawText(rectifyLine, {
+      x: pageWidth - margin - rectifyWidth,
+      y: cursorY - 70,
+      size: 10,
+      font: fontRegular,
+      color: subtitleColor,
+    });
+    if (rectification.reason) {
+      const reasonLine = `Motivo: ${truncate(rectification.reason, 50)}`;
+      const reasonWidth = fontRegular.widthOfTextAtSize(reasonLine, 10);
+      page.drawText(reasonLine, {
+        x: pageWidth - margin - reasonWidth,
+        y: cursorY - 86,
+        size: 10,
+        font: fontRegular,
+        color: subtitleColor,
+      });
+    }
+  }
+
+  cursorY -= (logo ? 100 : 70) + extraHeaderLines * 16;
+
+  if (!isSimple && !isModerno) {
+    page.drawLine({
+      start: { x: margin, y: cursorY },
+      end: { x: pageWidth - margin, y: cursorY },
+      thickness: 1.5,
+      color: accent,
+    });
+  } else if (isModerno) {
+    cursorY -= 10;
+  }
+  cursorY -= 24;
+
+  // Bloque emisor / cliente en dos columnas, ambos parten de la misma altura.
+  const colWidth = (pageWidth - margin * 2 - 24) / 2;
+  const blockTop = cursorY;
+
+  const emisorBottom = drawPartyBlock(page, fontRegular, fontBold, {
+    x: margin,
+    y: blockTop,
+    width: colWidth,
+    title: "DATOS DEL EMISOR",
+    lines: [
+      profile.company_name || "(sin nombre configurado)",
+      profile.tax_id ? `NIF/CIF: ${profile.tax_id}` : "",
+      profile.address,
+      profile.phone ? `Tel: ${profile.phone}` : "",
+      profile.email,
+    ],
+    accent,
+  }).y;
+
+  const clientBottom = drawPartyBlock(page, fontRegular, fontBold, {
+    x: margin + colWidth + 24,
+    y: blockTop,
+    width: colWidth,
+    title: "DATOS DEL CLIENTE",
+    lines: [client.name, client.tax_id ? `NIF/CIF: ${client.tax_id}` : "", client.address, client.phone, client.email],
+    accent,
+  }).y;
+
+  cursorY = Math.min(emisorBottom, clientBottom) - 30;
+
+  // Tabla de la línea de servicio.
+  const tableTop = cursorY;
+  const rowHeight = 26;
+  page.drawRectangle({
+    x: margin,
+    y: tableTop - rowHeight,
+    width: pageWidth - margin * 2,
+    height: rowHeight,
+    color: accent,
+  });
+
+  const headers = ["Concepto", "Fecha servicio", "Importe"];
+  const colX = [margin + 10, margin + 300, pageWidth - margin - 110];
+  headers.forEach((h, i) => {
+    page.drawText(h, {
+      x: colX[i],
+      y: tableTop - rowHeight + 8,
+      size: 10.5,
+      font: fontBold,
+      color: rgb(1, 1, 1),
+    });
+  });
+
+  const bodyTop = tableTop - rowHeight;
+  const descriptionLines = buildConceptLines(invoice).flatMap((line) =>
+    wrapText(fontRegular, line, 10.5, colX[1] - colX[0] - 10)
+  );
+  descriptionLines.forEach((line, i) => {
+    page.drawText(line, {
+      x: colX[0],
+      y: bodyTop - 20 - i * 13,
+      size: 10.5,
+      font: fontRegular,
+      color: rgb(0.15, 0.15, 0.15),
+    });
+  });
+  page.drawText(formatDate(invoice.service_date), {
+    x: colX[1],
+    y: bodyTop - 20,
+    size: 10.5,
+    font: fontRegular,
+    color: rgb(0.15, 0.15, 0.15),
+  });
+  page.drawText(formatCurrency(invoice.base_amount), {
+    x: colX[2],
+    y: bodyTop - 20,
+    size: 10.5,
+    font: fontRegular,
+    color: rgb(0.15, 0.15, 0.15),
+  });
+
+  // Si la descripción ocupó más de una línea, el resto del bloque se desplaza hacia abajo.
+  const descriptionExtra = Math.max(0, descriptionLines.length - 1) * 13;
+
+  page.drawLine({
+    start: { x: margin, y: bodyTop - 32 - descriptionExtra },
+    end: { x: pageWidth - margin, y: bodyTop - 32 - descriptionExtra },
+    thickness: 0.75,
+    color: rgb(0.85, 0.85, 0.85),
+  });
+
+  // Totales, alineados a la derecha.
+  let totalsY = bodyTop - 56 - descriptionExtra;
+  totalsY = drawTotalRow(page, fontRegular, pageWidth, margin, totalsY, "Base imponible", formatCurrency(invoice.base_amount));
+  totalsY = drawTotalRow(
+    page,
+    fontRegular,
+    pageWidth,
+    margin,
+    totalsY,
+    `IVA (${invoice.iva_rate}%)`,
+    formatCurrency(invoice.iva_amount)
+  );
+  page.drawLine({
+    start: { x: pageWidth - margin - 220, y: totalsY + 6 },
+    end: { x: pageWidth - margin, y: totalsY + 6 },
+    thickness: 1,
+    color: rgb(0.7, 0.7, 0.7),
+  });
+  totalsY -= 6;
+  totalsY = drawTotalRow(
+    page,
+    fontBold,
+    pageWidth,
+    margin,
+    totalsY,
+    "TOTAL",
+    formatCurrency(invoice.total_amount),
+    13,
+    accent
+  );
+
+  // Sello y firma manual, en la parte inferior de la página.
+  const footerY = 150;
+  const stamp = await embedImageSmart(doc, profile.stamp_url);
+  if (stamp) {
+    const maxW = 110;
+    const maxH = 90;
+    const scale = Math.min(maxW / stamp.width, maxH / stamp.height, 1);
+    page.drawImage(stamp, {
+      x: margin,
+      y: footerY,
+      width: stamp.width * scale,
+      height: stamp.height * scale,
+    });
+  }
+
+  if (data.signedWithCertificate) {
+    const boxW = 230;
+    const boxH = 74;
+    const boxX = pageWidth - margin - boxW;
+    const boxY = footerY - 4;
+    page.drawRectangle({
+      x: boxX,
+      y: boxY,
+      width: boxW,
+      height: boxH,
+      borderColor: accent,
+      borderWidth: 1,
+      color: rgb(1, 1, 1),
+    });
+    const now = new Date();
+    const timestamp = `${formatDate(invoice.issue_date)} ${String(now.getHours()).padStart(2, "0")}:${String(
+      now.getMinutes()
+    ).padStart(2, "0")}`;
+    const stampLines: { text: string; bold?: boolean }[] = [
+      { text: "Firmado electrónicamente", bold: true },
+      { text: "con certificado digital", bold: true },
+      { text: profile.company_name || "" },
+      ...(profile.tax_id ? [{ text: `NIF/CIF: ${profile.tax_id}` }] : []),
+      { text: timestamp },
+    ];
+    let stampY = boxY + boxH - 16;
+    for (const line of stampLines) {
+      if (!line.text) continue;
+      page.drawText(line.text, {
+        x: boxX + 10,
+        y: stampY,
+        size: line.bold ? 9.5 : 8.5,
+        font: line.bold ? fontBold : fontRegular,
+        color: line.bold ? accent : rgb(0.3, 0.3, 0.3),
+      });
+      stampY -= 12;
+    }
+  } else {
+    const signature = await embedImageSmart(doc, profile.signature_url);
+    if (signature) {
+      const maxW = 150;
+      const maxH = 70;
+      const scale = Math.min(maxW / signature.width, maxH / signature.height, 1);
+      const x = pageWidth - margin - signature.width * scale;
+      page.drawImage(signature, {
+        x,
+        y: footerY + 10,
+        width: signature.width * scale,
+        height: signature.height * scale,
+      });
+      page.drawLine({
+        start: { x, y: footerY + 8 },
+        end: { x: pageWidth - margin, y: footerY + 8 },
+        thickness: 0.75,
+        color: rgb(0.7, 0.7, 0.7),
+      });
+      page.drawText("Firma", {
+        x,
+        y: footerY - 6,
+        size: 9,
+        font: fontRegular,
+        color: rgb(0.5, 0.5, 0.5),
+      });
+    }
+  }
+
+  page.drawText("Generado con Facturtaxi", {
+    x: margin,
+    y: 30,
+    size: 8,
+    font: fontRegular,
+    color: rgb(0.7, 0.7, 0.7),
+  });
+
+  return doc.save();
+}
+
+function truncate(s: string, max: number) {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
+ * Reparte un texto en varias líneas para que quepa dentro de maxWidth (nunca
+ * se pierde contenido). Si una sola palabra (p.ej. un email o una URL sin
+ * espacios) no cabe entera, se corta por caracteres en vez de desbordar.
+ */
+function wrapText(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    if (font.widthOfTextAtSize(word, size) <= maxWidth) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (!current || font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+        current = candidate;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+      continue;
+    }
+
+    // La palabra por sí sola no cabe: se corta por caracteres.
+    if (current) {
+      lines.push(current);
+      current = "";
+    }
+    let chunk = "";
+    for (const ch of word) {
+      const candidate = chunk + ch;
+      if (chunk && font.widthOfTextAtSize(candidate, size) > maxWidth) {
+        lines.push(chunk);
+        chunk = ch;
+      } else {
+        chunk = candidate;
+      }
+    }
+    current = chunk;
+  }
+
+  if (current) lines.push(current);
+  return lines;
+}
+
+function drawTotalRow(
+  page: PDFPage,
+  font: PDFFont,
+  pageWidth: number,
+  margin: number,
+  y: number,
+  label: string,
+  value: string,
+  size = 11,
+  color = rgb(0.15, 0.15, 0.15)
+) {
+  const labelX = pageWidth - margin - 220;
+  const valueWidth = font.widthOfTextAtSize(value, size);
+  page.drawText(label, { x: labelX, y, size, font, color });
+  page.drawText(value, { x: pageWidth - margin - valueWidth, y, size, font, color });
+  return y - (size + 10);
+}
+
+function drawPartyBlock(
+  page: PDFPage,
+  fontRegular: PDFFont,
+  fontBold: PDFFont,
+  opts: { x: number; y: number; width: number; title: string; lines: string[]; accent: ReturnType<typeof rgb> }
+) {
+  let y = opts.y;
+  page.drawText(opts.title, { x: opts.x, y, size: 10, font: fontBold, color: opts.accent });
+  y -= 16;
+  for (const line of opts.lines) {
+    if (!line) continue;
+    for (const sub of wrapText(fontRegular, line, 10.5, opts.width)) {
+      page.drawText(sub, { x: opts.x, y, size: 10.5, font: fontRegular, color: rgb(0.2, 0.2, 0.2) });
+      y -= 14;
+    }
+  }
+  return { y };
+}
