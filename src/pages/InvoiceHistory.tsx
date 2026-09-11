@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { downloadInvoicePdf, listInvoices } from "../lib/invoices";
+import { useNavigate } from "react-router-dom";
+import { downloadInvoicePdf, getInvoiceShareUrl, listInvoices } from "../lib/invoices";
+import { openEmailShare, openWhatsAppShare } from "../lib/share";
 import type { InvoiceWithClient } from "../types";
 import Spinner from "../components/Spinner";
 
 export default function InvoiceHistory() {
+  const navigate = useNavigate();
   const [invoices, setInvoices] = useState<InvoiceWithClient[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [sharingId, setSharingId] = useState<string | null>(null);
 
   useEffect(() => {
     listInvoices()
@@ -48,11 +52,29 @@ export default function InvoiceHistory() {
     }
   }
 
+  async function handleShare(inv: InvoiceWithClient, channel: "whatsapp" | "email") {
+    if (!inv.pdf_path || !inv.clients) return;
+    setSharingId(inv.id);
+    setError(null);
+    try {
+      const shareUrl = await getInvoiceShareUrl(inv.pdf_path);
+      const result =
+        channel === "whatsapp"
+          ? openWhatsAppShare(inv.clients, inv, shareUrl)
+          : openEmailShare(inv.clients, inv, shareUrl);
+      if (!result.ok) setError(result.reason);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo generar el enlace para compartir");
+    } finally {
+      setSharingId(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-bold text-slate-900">Historial de facturas</h1>
-        <p className="text-sm text-slate-500">Ordenadas por número, de la más reciente a la más antigua.</p>
+        <p className="text-sm text-slate-500">Ordenadas de la más reciente a la más antigua.</p>
       </div>
 
       <input
@@ -70,7 +92,7 @@ export default function InvoiceHistory() {
         <div className="card text-center text-sm text-slate-400">No hay facturas que mostrar.</div>
       ) : (
         <div className="card overflow-x-auto p-0">
-          <table className="w-full min-w-[560px] text-sm">
+          <table className="w-full min-w-[700px] text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
               <tr>
                 <th className="px-4 py-3">Nº factura</th>
@@ -90,6 +112,11 @@ export default function InvoiceHistory() {
                         FIRMADA
                       </span>
                     )}
+                    {inv.rectifies_invoice_id && (
+                      <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                        RECTIFICATIVA
+                      </span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-500">
                     {formatDate(inv.issue_date)}
@@ -99,13 +126,40 @@ export default function InvoiceHistory() {
                     {inv.total_amount.toFixed(2)} €
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right">
-                    <button
-                      className="btn-secondary px-3 py-1.5 text-xs"
-                      disabled={downloadingId === inv.id}
-                      onClick={() => handleDownload(inv)}
-                    >
-                      {downloadingId === inv.id ? "..." : "⬇ Descargar"}
-                    </button>
+                    <div className="flex justify-end gap-1.5">
+                      <button
+                        title="Enviar por WhatsApp"
+                        className="btn-secondary px-2.5 py-1.5 text-xs"
+                        disabled={sharingId === inv.id}
+                        onClick={() => handleShare(inv, "whatsapp")}
+                      >
+                        📱
+                      </button>
+                      <button
+                        title="Enviar por email"
+                        className="btn-secondary px-2.5 py-1.5 text-xs"
+                        disabled={sharingId === inv.id}
+                        onClick={() => handleShare(inv, "email")}
+                      >
+                        ✉️
+                      </button>
+                      <button
+                        className="btn-secondary px-3 py-1.5 text-xs"
+                        disabled={downloadingId === inv.id}
+                        onClick={() => handleDownload(inv)}
+                      >
+                        {downloadingId === inv.id ? "..." : "⬇"}
+                      </button>
+                      {!inv.rectifies_invoice_id && (
+                        <button
+                          title="Crear factura rectificativa"
+                          className="btn-secondary px-3 py-1.5 text-xs"
+                          onClick={() => navigate("/nueva-factura", { state: { rectifyInvoiceId: inv.id } })}
+                        >
+                          Rectificar
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

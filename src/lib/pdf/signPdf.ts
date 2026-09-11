@@ -1,6 +1,6 @@
 import { PDFDocument } from "pdf-lib";
 import { pdflibAddPlaceholder } from "@signpdf/placeholder-pdf-lib";
-import signpdf from "@signpdf/signpdf";
+import { SignPdf } from "@signpdf/signpdf";
 import { P12Signer } from "@signpdf/signer-p12";
 
 /**
@@ -28,6 +28,7 @@ export async function signPdfWithCertificate(
   const pdfWithPlaceholder = await doc.save({ useObjectStreams: false });
 
   const signer = new P12Signer(Buffer.from(p12Bytes), { passphrase: password });
+  const signpdf = new SignPdf();
   const signed = await signpdf.sign(Buffer.from(pdfWithPlaceholder), signer);
 
   return new Uint8Array(signed);

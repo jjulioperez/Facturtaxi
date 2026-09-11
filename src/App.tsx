@@ -1,6 +1,7 @@
 import { HashRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import { ProfileProvider } from "./context/ProfileContext";
+import { CertificateProvider } from "./context/CertificateContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import RequireApproved from "./components/RequireApproved";
 import Layout from "./components/Layout";
@@ -18,21 +19,23 @@ export default function App() {
   return (
     <AuthProvider>
       <ProfileProvider>
-        <HashRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route element={<ProtectedRoute />}>
-              <Route element={<RequireApproved />}>
-                <Route element={<Layout />}>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/nueva-factura" element={<NewInvoice />} />
-                  <Route path="/facturas" element={<InvoiceHistory />} />
-                  <Route path="/plantilla" element={<Template />} />
+        <CertificateProvider>
+          <HashRouter>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route element={<ProtectedRoute />}>
+                <Route element={<RequireApproved />}>
+                  <Route element={<Layout />}>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/nueva-factura" element={<NewInvoice />} />
+                    <Route path="/facturas" element={<InvoiceHistory />} />
+                    <Route path="/plantilla" element={<Template />} />
+                  </Route>
                 </Route>
               </Route>
-            </Route>
-          </Routes>
-        </HashRouter>
+            </Routes>
+          </HashRouter>
+        </CertificateProvider>
       </ProfileProvider>
     </AuthProvider>
   );

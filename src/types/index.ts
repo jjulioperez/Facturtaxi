@@ -44,6 +44,8 @@ export interface Invoice {
   total_amount: number;
   pdf_path: string | null;
   signed_with_certificate: boolean;
+  rectifies_invoice_id: string | null;
+  rectification_reason: string | null;
   created_at?: string;
   clients?: Client;
 }

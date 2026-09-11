@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { useProfile } from "../context/ProfileContext";
 import { supabase } from "../lib/supabaseClient";
 import { uploadBrandingImage } from "../lib/branding";
+import { setInvoiceCounter } from "../lib/invoices";
 import { generateInvoicePdf } from "../lib/pdf/generateInvoicePdf";
 import type { Profile, TemplateStyle } from "../types";
 import Spinner from "../components/Spinner";
@@ -44,6 +45,9 @@ export default function Template() {
   const [message, setMessage] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [nextNumberInput, setNextNumberInput] = useState<number>(1);
+  const [numberSaving, setNumberSaving] = useState(false);
+  const [numberMessage, setNumberMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (profile) {
@@ -81,6 +85,26 @@ export default function Template() {
       setMessage(err instanceof Error ? `Error: ${err.message}` : "No se pudieron guardar los datos.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSetNextNumber() {
+    if (!profile) return;
+    if (!Number.isInteger(nextNumberInput) || nextNumberInput < 1) {
+      setNumberMessage("Introduce un número entero de 1 o mayor.");
+      return;
+    }
+    setNumberSaving(true);
+    setNumberMessage(null);
+    try {
+      await setInvoiceCounter(profile.invoice_series_prefix, nextNumberInput);
+      setNumberMessage(
+        `Hecho: tu próxima factura será ${profile.invoice_series_prefix}-${String(nextNumberInput).padStart(4, "0")}.`
+      );
+    } catch (err) {
+      setNumberMessage(err instanceof Error ? `Error: ${err.message}` : "No se pudo actualizar el número.");
+    } finally {
+      setNumberSaving(false);
     }
   }
 
@@ -204,6 +228,28 @@ export default function Template() {
               onChange={(e) => update("default_iva", Number(e.target.value))}
             />
           </div>
+        </div>
+
+        <div className="border-t border-slate-100 pt-4">
+          <label className="label">Próximo número de factura (serie {form.invoice_series_prefix || "—"})</label>
+          <p className="mb-2 text-xs text-slate-400">
+            Útil para continuar la numeración de facturas que ya emitiste fuera de la app. Guarda antes el prefijo
+            de serie si lo has cambiado.
+          </p>
+          <div className="flex gap-3">
+            <input
+              className="input"
+              type="number"
+              min={1}
+              step={1}
+              value={nextNumberInput}
+              onChange={(e) => setNextNumberInput(Number(e.target.value))}
+            />
+            <button type="button" className="btn-secondary shrink-0" onClick={handleSetNextNumber} disabled={numberSaving}>
+              {numberSaving ? "..." : "Actualizar"}
+            </button>
+          </div>
+          {numberMessage && <p className="mt-2 text-sm text-slate-600">{numberMessage}</p>}
         </div>
       </div>
 

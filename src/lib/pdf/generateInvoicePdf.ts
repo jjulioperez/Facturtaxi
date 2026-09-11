@@ -8,6 +8,8 @@ export interface InvoiceData {
     Invoice,
     "series" | "number" | "issue_date" | "service_date" | "description" | "base_amount" | "iva_rate" | "iva_amount" | "total_amount"
   >;
+  /** Presente cuando esta factura es una rectificativa de otra anterior. */
+  rectification?: { originalFullNumber: string; reason: string };
 }
 
 function hexToRgb(hex: string) {
@@ -57,11 +59,12 @@ async function embedImageSmart(doc: PDFDocument, url: string | null | undefined)
  * Devuelve los bytes del PDF (sin firmar con certificado todavía).
  */
 export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array> {
-  const { profile, client, invoice } = data;
+  const { profile, client, invoice, rectification } = data;
   const accent = hexToRgb(profile.accent_color || "#0d9488");
   const style = profile.template_style || "clasico";
   const isModerno = style === "moderno";
   const isSimple = style === "simple";
+  const extraHeaderLines = rectification ? (rectification.reason ? 2 : 1) : 0;
 
   const doc = await PDFDocument.create();
   const page = doc.addPage([595.28, 841.89]); // A4
@@ -73,9 +76,10 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array>
   let cursorY = page.getHeight() - margin;
 
   if (isModerno) {
-    // Debe cubrir el logo y las 3 líneas de cabecera (título, número, fecha);
-    // si no, el texto claro queda ilegible sobre el fondo blanco.
-    const bannerHeight = 120;
+    // Debe cubrir el logo y las líneas de cabecera (título, número, fecha, y
+    // las líneas extra de rectificativa si las hay); si no, el texto claro
+    // queda ilegible sobre el fondo blanco.
+    const bannerHeight = 120 + extraHeaderLines * 16;
     page.drawRectangle({ x: 0, y: page.getHeight() - bannerHeight, width: pageWidth, height: bannerHeight, color: accent });
   }
 
@@ -93,8 +97,8 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array>
   }
 
   // Cabecera: título FACTURA + número, alineado a la derecha.
-  const title = "FACTURA";
-  const titleSize = 22;
+  const title = rectification ? "FACTURA RECTIFICATIVA" : "FACTURA";
+  const titleSize = rectification ? 15 : 22;
   const titleColor = isModerno ? rgb(1, 1, 1) : isSimple ? rgb(0.15, 0.15, 0.15) : accent;
   const titleWidth = fontBold.widthOfTextAtSize(title, titleSize);
   page.drawText(title, {
@@ -127,7 +131,30 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array>
     color: subtitleColor,
   });
 
-  cursorY -= logo ? 100 : 70;
+  if (rectification) {
+    const rectifyLine = `Rectifica a la factura Nº ${rectification.originalFullNumber}`;
+    const rectifyWidth = fontRegular.widthOfTextAtSize(rectifyLine, 10);
+    page.drawText(rectifyLine, {
+      x: pageWidth - margin - rectifyWidth,
+      y: cursorY - 70,
+      size: 10,
+      font: fontRegular,
+      color: subtitleColor,
+    });
+    if (rectification.reason) {
+      const reasonLine = `Motivo: ${truncate(rectification.reason, 50)}`;
+      const reasonWidth = fontRegular.widthOfTextAtSize(reasonLine, 10);
+      page.drawText(reasonLine, {
+        x: pageWidth - margin - reasonWidth,
+        y: cursorY - 86,
+        size: 10,
+        font: fontRegular,
+        color: subtitleColor,
+      });
+    }
+  }
+
+  cursorY -= (logo ? 100 : 70) + extraHeaderLines * 16;
 
   if (!isSimple && !isModerno) {
     page.drawLine({
