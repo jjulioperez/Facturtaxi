@@ -2,6 +2,7 @@ import { PDFDocument } from "pdf-lib";
 import { pdflibAddPlaceholder } from "@signpdf/placeholder-pdf-lib";
 import { SignPdf } from "@signpdf/signpdf";
 import { P12Signer } from "@signpdf/signer-p12";
+import { SUBFILTER_ETSI_CADES_DETACHED } from "@signpdf/utils";
 
 /**
  * Firma digitalmente un PDF (PAdES básico) usando un certificado .p12/.pfx
@@ -23,6 +24,10 @@ export async function signPdfWithCertificate(
     contactInfo: "",
     name: "Facturtaxi",
     location: "",
+    // PAdES-B (ETSI EN 319 142-1) en vez del filtro heredado "adbe.pkcs7.detached":
+    // es el que usan las herramientas españolas oficiales (AutoFirma, etc.) y el
+    // que esperan los validadores modernos más estrictos.
+    subFilter: SUBFILTER_ETSI_CADES_DETACHED,
   });
 
   const pdfWithPlaceholder = await doc.save({ useObjectStreams: false });
