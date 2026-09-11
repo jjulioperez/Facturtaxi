@@ -15,6 +15,8 @@ export interface Profile {
   default_iva: number;
   invoice_series_prefix: string;
   approved: boolean;
+  certificate_path: string | null;
+  certificate_filename: string | null;
   created_at?: string;
 }
 

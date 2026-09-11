@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { useProfile } from "../context/ProfileContext";
 import { supabase } from "../lib/supabaseClient";
 import { uploadBrandingImage } from "../lib/branding";
+import { deleteCertificateFile, uploadCertificateFile } from "../lib/certificate";
 import { setInvoiceCounter } from "../lib/invoices";
 import { generateInvoicePdf } from "../lib/pdf/generateInvoicePdf";
 import type { Profile, TemplateStyle } from "../types";
@@ -48,6 +49,9 @@ export default function Template() {
   const [nextNumberInput, setNextNumberInput] = useState<number>(1);
   const [numberSaving, setNumberSaving] = useState(false);
   const [numberMessage, setNumberMessage] = useState<string | null>(null);
+  const [certInfo, setCertInfo] = useState<{ path: string; filename: string } | null>(null);
+  const [certBusy, setCertBusy] = useState(false);
+  const [certMessage, setCertMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (profile) {
@@ -63,6 +67,11 @@ export default function Template() {
         invoice_series_prefix: profile.invoice_series_prefix,
       });
       setImages({ logo_url: profile.logo_url, stamp_url: profile.stamp_url, signature_url: profile.signature_url });
+      setCertInfo(
+        profile.certificate_path && profile.certificate_filename
+          ? { path: profile.certificate_path, filename: profile.certificate_filename }
+          : null
+      );
     }
   }, [profile]);
 
@@ -108,6 +117,50 @@ export default function Template() {
     }
   }
 
+  async function handleCertificateUpload(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+    setCertBusy(true);
+    setCertMessage(null);
+    try {
+      const path = await uploadCertificateFile(user.id, file);
+      const { error } = await supabase
+        .from("profiles")
+        .update({ certificate_path: path, certificate_filename: file.name })
+        .eq("id", user.id);
+      if (error) throw error;
+      setCertInfo({ path, filename: file.name });
+      await refresh();
+      setCertMessage("Certificado guardado. Se te pedirá la contraseña cada vez que firmes una factura.");
+    } catch (err) {
+      setCertMessage(err instanceof Error ? `Error: ${err.message}` : "No se pudo guardar el certificado.");
+    } finally {
+      setCertBusy(false);
+      e.target.value = "";
+    }
+  }
+
+  async function handleCertificateDelete() {
+    if (!user || !certInfo) return;
+    setCertBusy(true);
+    setCertMessage(null);
+    try {
+      await deleteCertificateFile(certInfo.path);
+      const { error } = await supabase
+        .from("profiles")
+        .update({ certificate_path: null, certificate_filename: null })
+        .eq("id", user.id);
+      if (error) throw error;
+      setCertInfo(null);
+      await refresh();
+      setCertMessage("Certificado eliminado de tu cuenta.");
+    } catch (err) {
+      setCertMessage(err instanceof Error ? `Error: ${err.message}` : "No se pudo eliminar el certificado.");
+    } finally {
+      setCertBusy(false);
+    }
+  }
+
   async function handleUpload(kind: "logo" | "stamp" | "signature", e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !user) return;
@@ -134,6 +187,8 @@ export default function Template() {
       const previewProfile: Profile = {
         id: user?.id ?? "preview",
         approved: true,
+        certificate_path: null,
+        certificate_filename: null,
         ...form,
         ...images,
       };
@@ -304,6 +359,34 @@ export default function Template() {
         <p className="text-xs text-slate-400">
           Recomendado: imágenes PNG con fondo transparente para el sello y la firma.
         </p>
+      </div>
+
+      <div className="card space-y-3">
+        <h2 className="text-sm font-semibold text-slate-700">Certificado digital (firma electrónica)</h2>
+        <p className="text-xs text-slate-500">
+          Guarda aquí tu certificado (.p12/.pfx) para no tener que subirlo cada vez que firmes una factura. Se
+          guarda cifrado y privado en tu cuenta — solo tú puedes acceder a él. La contraseña nunca se guarda: te la
+          seguirá pidiendo cada vez que firmes (o se recordará solo en memoria durante tu sesión, como hasta ahora).
+        </p>
+
+        {certInfo ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-50 p-3">
+            <span className="text-sm text-slate-700">🔒 Certificado guardado: <strong>{certInfo.filename}</strong></span>
+            <label className="btn-secondary cursor-pointer text-xs">
+              {certBusy ? "..." : "Cambiar"}
+              <input type="file" accept=".p12,.pfx" className="hidden" disabled={certBusy} onChange={handleCertificateUpload} />
+            </label>
+            <button type="button" className="btn-danger text-xs" onClick={handleCertificateDelete} disabled={certBusy}>
+              Eliminar
+            </button>
+          </div>
+        ) : (
+          <label className="btn-secondary inline-flex w-full cursor-pointer justify-center sm:w-auto">
+            {certBusy ? "Subiendo..." : "Subir certificado (.p12 / .pfx)"}
+            <input type="file" accept=".p12,.pfx" className="hidden" disabled={certBusy} onChange={handleCertificateUpload} />
+          </label>
+        )}
+        {certMessage && <p className="text-sm text-slate-600">{certMessage}</p>}
       </div>
 
       {message && <p className="text-sm text-slate-600">{message}</p>}

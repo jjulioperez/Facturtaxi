@@ -14,6 +14,7 @@ import {
   rectificationSeries,
   reserveInvoiceNumber,
 } from "../lib/invoices";
+import { downloadCertificateFile } from "../lib/certificate";
 import { generateInvoicePdf } from "../lib/pdf/generateInvoicePdf";
 import { signPdfWithCertificate } from "../lib/pdf/signPdf";
 import { openEmailShare, openWhatsAppShare } from "../lib/share";
@@ -50,6 +51,8 @@ export default function NewInvoice() {
   const [signWithCertificate, setSignWithCertificate] = useState(false);
   const [certFile, setCertFile] = useState<File | null>(null);
   const [certPassword, setCertPassword] = useState("");
+  const [usingStoredCert, setUsingStoredCert] = useState(false);
+  const [loadingStoredCert, setLoadingStoredCert] = useState(false);
 
   const [step, setStep] = useState<Step>("form");
   const [busy, setBusy] = useState(false);
@@ -86,6 +89,21 @@ export default function NewInvoice() {
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la factura original"))
       .finally(() => setRectifyLoading(false));
   }, [rectifyInvoiceId]);
+
+  useEffect(() => {
+    if (step !== "sign" || certFile || cachedCertificate || !profile?.certificate_path) return;
+    setLoadingStoredCert(true);
+    downloadCertificateFile(profile.certificate_path)
+      .then((bytes) => {
+        const filename = profile.certificate_filename || "certificado.p12";
+        setCertFile(new File([bytes], filename, { type: "application/x-pkcs12" }));
+        setUsingStoredCert(true);
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? `No se pudo recuperar tu certificado guardado: ${err.message}` : "No se pudo recuperar tu certificado guardado.")
+      )
+      .finally(() => setLoadingStoredCert(false));
+  }, [step, certFile, cachedCertificate, profile]);
 
   const { ivaAmount, total } = useMemo(() => computeAmounts(baseAmount || 0, ivaRate || 0), [baseAmount, ivaRate]);
 
@@ -250,19 +268,42 @@ export default function NewInvoice() {
         <h1 className="text-xl font-bold text-slate-900">Firmar con certificado digital</h1>
         <div className="card space-y-4">
           <p className="text-sm text-slate-600">
-            Sube tu certificado digital (<code>.p12</code> o <code>.pfx</code>) y escribe su contraseña. Todo
-            ocurre en tu navegador: no se envían a ningún servidor. Se recordarán en memoria durante esta sesión
-            para que no tengas que subirlos en cada factura (nunca se guardan en el móvil/disco).
+            {usingStoredCert
+              ? "Usando el certificado guardado en tu cuenta. Solo falta la contraseña: no se guarda en ningún sitio, ni siquiera en tu cuenta."
+              : "Sube tu certificado digital (.p12 o .pfx) y escribe su contraseña. Todo ocurre en tu navegador: no se envían a ningún servidor."}
           </p>
-          <div>
-            <label className="label">Certificado (.p12 / .pfx)</label>
-            <input
-              type="file"
-              accept=".p12,.pfx"
-              className="input"
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setCertFile(e.target.files?.[0] ?? null)}
-            />
-          </div>
+
+          {loadingStoredCert ? (
+            <Spinner label="Recuperando tu certificado guardado..." />
+          ) : usingStoredCert && certFile ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-50 p-3 text-sm">
+              <span>🔒 {certFile.name} (guardado en tu cuenta)</span>
+              <button
+                type="button"
+                className="text-brand-700 underline"
+                onClick={() => {
+                  setCertFile(null);
+                  setUsingStoredCert(false);
+                }}
+              >
+                Usar otro certificado
+              </button>
+            </div>
+          ) : (
+            <div>
+              <label className="label">Certificado (.p12 / .pfx)</label>
+              <input
+                type="file"
+                accept=".p12,.pfx"
+                className="input"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setCertFile(e.target.files?.[0] ?? null)}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                💡 Guarda tu certificado en <strong>Plantilla</strong> para no tener que subirlo cada vez.
+              </p>
+            </div>
+          )}
+
           <div>
             <label className="label">Contraseña del certificado</label>
             <input
@@ -278,7 +319,7 @@ export default function NewInvoice() {
             <button className="btn-secondary" onClick={() => setStep("form")} disabled={busy}>
               Volver
             </button>
-            <button className="btn-primary" onClick={handleSignAndFinish} disabled={busy}>
+            <button className="btn-primary" onClick={handleSignAndFinish} disabled={busy || loadingStoredCert}>
               {busy ? "Firmando..." : "Firmar y emitir factura"}
             </button>
           </div>
