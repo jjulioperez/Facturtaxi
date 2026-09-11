@@ -78,9 +78,14 @@ async function insertAndUploadInvoice(
   const fullNumber = `${series}-${String(number).padStart(4, "0")}`;
   const pdfPath = `${userId}/factura-${fullNumber}.pdf`;
 
+  // upsert: true a propósito. La ruta es determinista a partir de
+  // usuario+serie+número, así que solo puede "chocar" con un PDF de un
+  // intento anterior para ese mismo número (p.ej. si se reintenta tras un
+  // fallo, o si el número se reutiliza tras fijar manualmente el contador
+  // hacia atrás); en ambos casos lo correcto es sobrescribirlo.
   const { error: uploadError } = await supabase.storage
     .from("invoices")
-    .upload(pdfPath, pdfBytes, { contentType: "application/pdf", upsert: false });
+    .upload(pdfPath, pdfBytes, { contentType: "application/pdf", upsert: true });
   if (uploadError) {
     throw new Error(
       `La factura ${fullNumber} se guardó pero no se pudo subir el PDF: ${uploadError.message}. Puedes reintentarlo desde el historial.`
