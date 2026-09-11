@@ -9,6 +9,7 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import NewInvoice from "./pages/NewInvoice";
 import InvoiceHistory from "./pages/InvoiceHistory";
+import Clients from "./pages/Clients";
 import Template from "./pages/Template";
 import ConfigMissing from "./pages/ConfigMissing";
 import { isSupabaseConfigured } from "./lib/supabaseClient";
@@ -29,6 +30,7 @@ export default function App() {
                     <Route path="/" element={<Dashboard />} />
                     <Route path="/nueva-factura" element={<NewInvoice />} />
                     <Route path="/facturas" element={<InvoiceHistory />} />
+                    <Route path="/clientes" element={<Clients />} />
                     <Route path="/plantilla" element={<Template />} />
                   </Route>
                 </Route>

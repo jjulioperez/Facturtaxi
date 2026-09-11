@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { supabase } from "../lib/supabaseClient";
 import type { Profile } from "../types";
 import { useAuth } from "./AuthContext";
+import { isDemoMode } from "../lib/demoMode";
+import { getDemoProfile } from "../lib/demoStore";
 
 interface ProfileContextValue {
   profile: Profile | null;
@@ -21,6 +23,11 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   async function refresh() {
+    if (isDemoMode()) {
+      setProfile(getDemoProfile());
+      setLoading(false);
+      return;
+    }
     if (!user) {
       setProfile(null);
       setLoading(false);

@@ -1,4 +1,5 @@
 import { supabase } from "./supabaseClient";
+import { isDemoMode } from "./demoMode";
 
 export type BrandingKind = "logo" | "stamp" | "signature";
 
@@ -9,6 +10,10 @@ export type BrandingKind = "logo" | "stamp" | "signature";
  * versiones antiguas.
  */
 export async function uploadBrandingImage(userId: string, kind: BrandingKind, file: File): Promise<string> {
+  // Modo demo: nada de Storage real, basta con una URL local al propio
+  // archivo (vive solo en esta pestaña, se pierde al recargar).
+  if (isDemoMode()) return URL.createObjectURL(file);
+
   const ext = file.name.split(".").pop()?.toLowerCase() || "png";
   const path = `${userId}/${kind}.${ext}`;
 

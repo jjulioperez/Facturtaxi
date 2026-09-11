@@ -1,6 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
+import { isDemoMode } from "../lib/demoMode";
+import { DEMO_USER_ID } from "../lib/demoStore";
+
+const demoUser = { id: DEMO_USER_ID, email: "demo@facturtaxi.app" } as unknown as User;
 
 interface AuthContextValue {
   session: Session | null;
@@ -34,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ session, user: session?.user ?? null, loading }),
+    () => (isDemoMode() ? { session: null, user: demoUser, loading: false } : { session, user: session?.user ?? null, loading }),
     [session, loading]
   );
 

@@ -1,10 +1,10 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useProfile } from "../context/ProfileContext";
-import { supabase } from "../lib/supabaseClient";
 import { uploadBrandingImage } from "../lib/branding";
 import { deleteCertificateFile, uploadCertificateFile } from "../lib/certificate";
 import { setInvoiceCounter } from "../lib/invoices";
+import { updateProfile } from "../lib/profile";
 import { generateInvoicePdf } from "../lib/pdf/generateInvoicePdf";
 import type { Profile, TemplateStyle } from "../types";
 import Spinner from "../components/Spinner";
@@ -86,8 +86,7 @@ export default function Template() {
     setSaving(true);
     setMessage(null);
     try {
-      const { error } = await supabase.from("profiles").update(form).eq("id", user.id);
-      if (error) throw error;
+      await updateProfile(user.id, form);
       await refresh();
       setMessage("Datos guardados correctamente.");
     } catch (err) {
@@ -124,11 +123,7 @@ export default function Template() {
     setCertMessage(null);
     try {
       const path = await uploadCertificateFile(user.id, file);
-      const { error } = await supabase
-        .from("profiles")
-        .update({ certificate_path: path, certificate_filename: file.name })
-        .eq("id", user.id);
-      if (error) throw error;
+      await updateProfile(user.id, { certificate_path: path, certificate_filename: file.name });
       setCertInfo({ path, filename: file.name });
       await refresh();
       setCertMessage("Certificado guardado. Se te pedirá la contraseña cada vez que firmes una factura.");
@@ -146,11 +141,7 @@ export default function Template() {
     setCertMessage(null);
     try {
       await deleteCertificateFile(certInfo.path);
-      const { error } = await supabase
-        .from("profiles")
-        .update({ certificate_path: null, certificate_filename: null })
-        .eq("id", user.id);
-      if (error) throw error;
+      await updateProfile(user.id, { certificate_path: null, certificate_filename: null });
       setCertInfo(null);
       await refresh();
       setCertMessage("Certificado eliminado de tu cuenta.");
@@ -169,8 +160,7 @@ export default function Template() {
     try {
       const url = await uploadBrandingImage(user.id, kind, file);
       const column = `${kind}_url` as const;
-      const { error } = await supabase.from("profiles").update({ [column]: url }).eq("id", user.id);
-      if (error) throw error;
+      await updateProfile(user.id, { [column]: url });
       setImages((prev) => ({ ...prev, [column]: url }));
       await refresh();
     } catch (err) {
@@ -208,7 +198,12 @@ export default function Template() {
           number: 1,
           issue_date: new Date().toISOString().slice(0, 10),
           service_date: new Date().toISOString().slice(0, 10),
-          description: "Trayecto Aeropuerto - Centro ciudad",
+          description: "",
+          service_origin: "Aeropuerto",
+          service_destination: "Centro ciudad",
+          service_time: "14:30",
+          tariff_number: "Tarifa 2",
+          supplements: "",
           base_amount: 25,
           iva_rate: form.default_iva,
           iva_amount: Math.round(25 * form.default_iva) / 100,

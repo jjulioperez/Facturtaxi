@@ -10,14 +10,16 @@ import {
   createInvoice,
   createRectificationInvoice,
   getInvoiceById,
-  getInvoiceShareUrl,
   rectificationSeries,
   reserveInvoiceNumber,
+  type ServiceDetails,
 } from "../lib/invoices";
 import { downloadCertificateFile } from "../lib/certificate";
 import { generateInvoicePdf } from "../lib/pdf/generateInvoicePdf";
 import { signPdfWithCertificate } from "../lib/pdf/signPdf";
-import { openEmailShare, openWhatsAppShare } from "../lib/share";
+import { shareInvoicePdf } from "../lib/share";
+import { getPendingSharedTicket } from "../lib/ticketShare";
+import type { ParsedTicket } from "../lib/ticketParser";
 import type { Client, Invoice } from "../types";
 import Spinner from "../components/Spinner";
 
@@ -29,7 +31,8 @@ export default function NewInvoice() {
   const { certificate: cachedCertificate, setCertificate, clearCertificate } = useCertificate();
   const navigate = useNavigate();
   const location = useLocation();
-  const rectifyInvoiceId = (location.state as { rectifyInvoiceId?: string } | null)?.rectifyInvoiceId ?? null;
+  const locationState = location.state as { rectifyInvoiceId?: string; importedTicket?: ParsedTicket } | null;
+  const rectifyInvoiceId = locationState?.rectifyInvoiceId ?? null;
 
   const [rectifyOriginal, setRectifyOriginal] = useState<Invoice | null>(null);
   const [rectifyClient, setRectifyClient] = useState<Client | null>(null);
@@ -44,6 +47,11 @@ export default function NewInvoice() {
   const [newClient, setNewClient] = useState({ name: "", tax_id: "", address: "", phone: "", email: "" });
 
   const [serviceDate, setServiceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [serviceOrigin, setServiceOrigin] = useState("");
+  const [serviceDestination, setServiceDestination] = useState("");
+  const [serviceTime, setServiceTime] = useState("");
+  const [tariffNumber, setTariffNumber] = useState("");
+  const [supplements, setSupplements] = useState("");
   const [description, setDescription] = useState("");
   const [baseAmount, setBaseAmount] = useState<number>(0);
   const [ivaRate, setIvaRate] = useState<number>(10);
@@ -54,11 +62,14 @@ export default function NewInvoice() {
   const [usingStoredCert, setUsingStoredCert] = useState(false);
   const [loadingStoredCert, setLoadingStoredCert] = useState(false);
 
+  const [importInfo, setImportInfo] = useState<string | null>(null);
+
   const [step, setStep] = useState<Step>("form");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingClient, setPendingClient] = useState<Client | null>(null);
   const [finalPdfUrl, setFinalPdfUrl] = useState<string | null>(null);
+  const [finalPdfBlob, setFinalPdfBlob] = useState<Blob | null>(null);
   const [invoiceLabel, setInvoiceLabel] = useState<string>("");
   const [finalInvoice, setFinalInvoice] = useState<Invoice | null>(null);
   const [finalClient, setFinalClient] = useState<Client | null>(null);
@@ -76,12 +87,47 @@ export default function NewInvoice() {
   }, [profile]);
 
   useEffect(() => {
+    // Si la app se abrió porque el taxista compartió un ticket desde otra
+    // app (el taxímetro) con el menú "Compartir" de Android, rellena el
+    // formulario con esos datos. No pisa una rectificativa en curso.
+    // El Dashboard ya puede haber consumido el ticket pendiente y pasado
+    // los datos ya extraídos por location.state; si no, lo comprobamos
+    // aquí directamente (p.ej. si se llega a esta pantalla sin pasar antes
+    // por el Dashboard).
+    if (rectifyInvoiceId) return;
+    function applyImportedTicket(parsed: ParsedTicket) {
+      if (parsed.service_origin) setServiceOrigin(parsed.service_origin);
+      if (parsed.service_destination) setServiceDestination(parsed.service_destination);
+      if (parsed.service_time) setServiceTime(parsed.service_time);
+      if (parsed.tariff_number) setTariffNumber(parsed.tariff_number);
+      if (parsed.supplements) setSupplements(parsed.supplements);
+      if (parsed.base_amount != null) setBaseAmount(parsed.base_amount);
+      if (parsed.iva_rate != null) setIvaRate(parsed.iva_rate);
+      setImportInfo("Datos importados desde tu app de taxímetro. Revísalos antes de generar la factura.");
+    }
+
+    if (locationState?.importedTicket) {
+      applyImportedTicket(locationState.importedTicket);
+      return;
+    }
+    getPendingSharedTicket().then((parsed) => {
+      if (parsed) applyImportedTicket(parsed);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rectifyInvoiceId]);
+
+  useEffect(() => {
     if (!rectifyInvoiceId) return;
     getInvoiceById(rectifyInvoiceId)
       .then((inv) => {
         setRectifyOriginal(inv);
         setRectifyClient(inv.clients);
         setServiceDate(inv.service_date);
+        setServiceOrigin(inv.service_origin ?? "");
+        setServiceDestination(inv.service_destination ?? "");
+        setServiceTime(inv.service_time ?? "");
+        setTariffNumber(inv.tariff_number ?? "");
+        setSupplements(inv.supplements ?? "");
         setDescription(inv.description);
         setBaseAmount(inv.base_amount);
         setIvaRate(inv.iva_rate);
@@ -106,6 +152,17 @@ export default function NewInvoice() {
   }, [step, certFile, cachedCertificate, profile]);
 
   const { ivaAmount, total } = useMemo(() => computeAmounts(baseAmount || 0, ivaRate || 0), [baseAmount, ivaRate]);
+
+  function buildService(): ServiceDetails {
+    return {
+      description,
+      service_origin: serviceOrigin,
+      service_destination: serviceDestination,
+      service_time: serviceTime,
+      tariff_number: tariffNumber,
+      supplements,
+    };
+  }
 
   if (profileLoading || rectifyLoading) return <Spinner label="Cargando..." />;
 
@@ -167,7 +224,7 @@ export default function NewInvoice() {
             originalInvoice: rectifyOriginal,
             client,
             serviceDate,
-            description,
+            service: buildService(),
             baseAmount,
             ivaRate,
             reason: rectifyReason,
@@ -177,13 +234,14 @@ export default function NewInvoice() {
         : await createInvoice(user.id, profile, {
             client,
             serviceDate,
-            description,
+            service: buildService(),
             baseAmount,
             ivaRate,
             signedPdfBytes,
             preAllocatedNumber,
           });
       const blob = new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
+      setFinalPdfBlob(blob);
       setFinalPdfUrl(URL.createObjectURL(blob));
       setInvoiceLabel(`${invoice.series}-${String(invoice.number).padStart(4, "0")}`);
       setFinalInvoice(invoice);
@@ -206,11 +264,12 @@ export default function NewInvoice() {
       // con un número provisional y sustituirlo después de conocer el real.
       const series = rectifyOriginal ? rectificationSeries(profile) : profile.invoice_series_prefix;
       const number = await reserveInvoiceNumber(series);
-      const draftInvoice = buildInvoiceCore(series, number, baseAmount, ivaRate, serviceDate, description);
+      const draftInvoice = buildInvoiceCore(series, number, baseAmount, ivaRate, serviceDate, buildService());
       const unsignedPdf = await generateInvoicePdf({
         profile,
         client,
         invoice: draftInvoice,
+        signedWithCertificate: true,
         rectification: rectifyOriginal
           ? {
               originalFullNumber: `${rectifyOriginal.series}-${String(rectifyOriginal.number).padStart(4, "0")}`,
@@ -244,19 +303,19 @@ export default function NewInvoice() {
     setCertPassword("");
   }
 
-  async function handleShareFinal(channel: "whatsapp" | "email") {
-    if (!finalInvoice || !finalClient || !finalInvoice.pdf_path) return;
+  async function handleShareFinal() {
+    if (!finalPdfBlob || !finalInvoice) return;
     setSharing(true);
     setShareError(null);
     try {
-      const shareUrl = await getInvoiceShareUrl(finalInvoice.pdf_path);
-      const result =
-        channel === "whatsapp"
-          ? openWhatsAppShare(finalClient, finalInvoice, shareUrl)
-          : openEmailShare(finalClient, finalInvoice, shareUrl);
-      if (!result.ok) setShareError(result.reason);
+      const result = await shareInvoicePdf(finalPdfBlob, finalInvoice, finalClient ?? undefined);
+      if (result.method === "downloaded") {
+        setShareError(
+          "Tu dispositivo no permite compartir archivos directamente: se ha descargado el PDF, adjúntalo tú mismo a WhatsApp o email."
+        );
+      }
     } catch (err) {
-      setShareError(err instanceof Error ? err.message : "No se pudo generar el enlace para compartir");
+      setShareError(err instanceof Error ? err.message : "No se pudo compartir la factura");
     } finally {
       setSharing(false);
     }
@@ -351,6 +410,12 @@ export default function NewInvoice() {
                 setStep("form");
                 setPendingClient(null);
                 setFinalPdfUrl(null);
+                setFinalPdfBlob(null);
+                setServiceOrigin("");
+                setServiceDestination("");
+                setServiceTime("");
+                setTariffNumber("");
+                setSupplements("");
                 setDescription("");
                 setBaseAmount(0);
                 setSignWithCertificate(false);
@@ -361,20 +426,12 @@ export default function NewInvoice() {
             </button>
           </div>
 
-          {finalClient && (finalClient.phone || finalClient.email) && (
+          {finalPdfBlob && (
             <div className="mt-4 border-t border-slate-100 pt-4">
-              <p className="mb-2 text-xs text-slate-500">Enviar al cliente:</p>
               <div className="flex flex-wrap justify-center gap-3">
-                {finalClient.phone && (
-                  <button className="btn-secondary" disabled={sharing} onClick={() => handleShareFinal("whatsapp")}>
-                    📱 WhatsApp
-                  </button>
-                )}
-                {finalClient.email && (
-                  <button className="btn-secondary" disabled={sharing} onClick={() => handleShareFinal("email")}>
-                    ✉️ Email
-                  </button>
-                )}
+                <button className="btn-secondary" disabled={sharing} onClick={handleShareFinal}>
+                  {sharing ? "Compartiendo..." : "📤 Compartir factura"}
+                </button>
               </div>
               {shareError && <p className="mt-2 text-sm text-red-600">{shareError}</p>}
             </div>
@@ -397,6 +454,12 @@ export default function NewInvoice() {
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
           Vas a rectificar la factura <strong>{rectifyOriginal.series}-{String(rectifyOriginal.number).padStart(4, "0")}</strong>.
           Se creará una factura nueva (serie R) que hace referencia a esta y no afecta a tu numeración normal.
+        </div>
+      )}
+
+      {importInfo && (
+        <div className="rounded-lg border border-brand-500 bg-brand-50 p-4 text-sm text-brand-800">
+          📥 {importInfo}
         </div>
       )}
 
@@ -503,11 +566,56 @@ export default function NewInvoice() {
               onChange={(e) => setServiceDate(e.target.value)}
             />
           </div>
-          <div className="sm:col-span-2">
-            <label className="label">Descripción / trayecto</label>
+          <div>
+            <label className="label">Hora</label>
+            <input
+              type="time"
+              className="input"
+              value={serviceTime}
+              onChange={(e) => setServiceTime(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Origen</label>
             <input
               className="input"
-              placeholder="Ej: Trayecto Aeropuerto - Centro ciudad"
+              placeholder="Ej: Aeropuerto de Jerez"
+              value={serviceOrigin}
+              onChange={(e) => setServiceOrigin(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Destino</label>
+            <input
+              className="input"
+              placeholder="Ej: Centro ciudad, Cádiz"
+              value={serviceDestination}
+              onChange={(e) => setServiceDestination(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Nº de tarifa aplicada</label>
+            <input
+              className="input"
+              placeholder="Ej: Tarifa 2"
+              value={tariffNumber}
+              onChange={(e) => setTariffNumber(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Suplementos</label>
+            <input
+              className="input"
+              placeholder="Ej: Equipaje 3€, nocturno 2€"
+              value={supplements}
+              onChange={(e) => setSupplements(e.target.value)}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Observaciones (opcional)</label>
+            <input
+              className="input"
+              placeholder="Notas adicionales para la factura"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />

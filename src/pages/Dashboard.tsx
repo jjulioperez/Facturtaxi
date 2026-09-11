@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useProfile } from "../context/ProfileContext";
 import { listInvoices } from "../lib/invoices";
+import { getPendingSharedTicket } from "../lib/ticketShare";
 import type { InvoiceWithClient } from "../types";
 import Spinner from "../components/Spinner";
 
@@ -9,11 +10,22 @@ export default function Dashboard() {
   const { profile, loading: profileLoading } = useProfile();
   const [recent, setRecent] = useState<InvoiceWithClient[]>([]);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   useEffect(() => {
     listInvoices()
       .then((all) => setRecent(all.slice(0, 5)))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    // Si la app Android se acaba de abrir porque el taxista compartió un
+    // ticket desde otra app, salta directo a "Nueva factura" con los datos
+    // ya extraídos, en vez de dejarlo en el Inicio.
+    getPendingSharedTicket().then((parsed) => {
+      if (parsed) navigate("/nueva-factura", { state: { importedTicket: parsed } });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const profileIncomplete = !profileLoading && profile && (!profile.company_name || !profile.tax_id);

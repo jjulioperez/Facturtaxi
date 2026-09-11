@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { downloadInvoicePdf, getInvoiceShareUrl, listInvoices } from "../lib/invoices";
-import { openEmailShare, openWhatsAppShare } from "../lib/share";
+import { downloadInvoicePdf, listInvoices } from "../lib/invoices";
+import { shareInvoicePdf } from "../lib/share";
 import type { InvoiceWithClient } from "../types";
 import Spinner from "../components/Spinner";
 
@@ -13,6 +13,7 @@ export default function InvoiceHistory() {
   const [query, setQuery] = useState("");
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [sharingId, setSharingId] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   useEffect(() => {
     listInvoices()
@@ -52,19 +53,21 @@ export default function InvoiceHistory() {
     }
   }
 
-  async function handleShare(inv: InvoiceWithClient, channel: "whatsapp" | "email") {
-    if (!inv.pdf_path || !inv.clients) return;
+  async function handleShare(inv: InvoiceWithClient) {
+    if (!inv.pdf_path) return;
     setSharingId(inv.id);
     setError(null);
+    setInfo(null);
     try {
-      const shareUrl = await getInvoiceShareUrl(inv.pdf_path);
-      const result =
-        channel === "whatsapp"
-          ? openWhatsAppShare(inv.clients, inv, shareUrl)
-          : openEmailShare(inv.clients, inv, shareUrl);
-      if (!result.ok) setError(result.reason);
+      const blob = await downloadInvoicePdf(inv.pdf_path);
+      const result = await shareInvoicePdf(blob, inv, inv.clients);
+      if (result.method === "downloaded") {
+        setInfo(
+          "Tu dispositivo no permite compartir archivos directamente: se ha descargado el PDF, adjúntalo tú mismo a WhatsApp o email."
+        );
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo generar el enlace para compartir");
+      setError(err instanceof Error ? err.message : "No se pudo compartir la factura");
     } finally {
       setSharingId(null);
     }
@@ -85,6 +88,7 @@ export default function InvoiceHistory() {
       />
 
       {error && <p className="text-sm text-red-600">{error}</p>}
+      {info && <p className="text-sm text-slate-500">{info}</p>}
 
       {loading ? (
         <Spinner />
@@ -128,20 +132,12 @@ export default function InvoiceHistory() {
                   <td className="whitespace-nowrap px-4 py-3 text-right">
                     <div className="flex justify-end gap-1.5">
                       <button
-                        title="Enviar por WhatsApp"
+                        title="Compartir factura (PDF)"
                         className="btn-secondary px-2.5 py-1.5 text-xs"
                         disabled={sharingId === inv.id}
-                        onClick={() => handleShare(inv, "whatsapp")}
+                        onClick={() => handleShare(inv)}
                       >
-                        📱
-                      </button>
-                      <button
-                        title="Enviar por email"
-                        className="btn-secondary px-2.5 py-1.5 text-xs"
-                        disabled={sharingId === inv.id}
-                        onClick={() => handleShare(inv, "email")}
-                      >
-                        ✉️
+                        {sharingId === inv.id ? "..." : "📤"}
                       </button>
                       <button
                         className="btn-secondary px-3 py-1.5 text-xs"

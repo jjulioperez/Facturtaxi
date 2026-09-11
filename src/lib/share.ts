@@ -1,66 +1,56 @@
 import type { Client, Invoice } from "../types";
 
-function sanitizePhoneForWhatsapp(phone: string): string | null {
-  const digits = phone.replace(/[^\d]/g, "").replace(/^0+/, "");
-  if (!digits) return null;
-  // Número español típico (9 dígitos, sin prefijo de país): se asume +34.
-  if (digits.length === 9) return `34${digits}`;
-  return digits;
-}
-
 function fullNumber(invoice: Pick<Invoice, "series" | "number">) {
   return `${invoice.series}-${String(invoice.number).padStart(4, "0")}`;
 }
 
-function messageText(invoice: Pick<Invoice, "series" | "number" | "total_amount">, shareUrl: string) {
-  return (
-    `Hola, aquí tienes tu factura nº ${fullNumber(invoice)} por importe de ${invoice.total_amount.toFixed(2)} €.\n\n` +
-    `Puedes descargarla aquí: ${shareUrl}`
-  );
-}
-
-function openViaAnchor(url: string) {
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
+  URL.revokeObjectURL(url);
 }
 
-/**
- * Abre WhatsApp (web o app, según el dispositivo) con un mensaje ya
- * redactado con el enlace de descarga de la factura. El taxista revisa y
- * pulsa enviar él mismo; esta función no envía nada automáticamente.
- */
-export function openWhatsAppShare(
-  client: Client,
-  invoice: Pick<Invoice, "series" | "number" | "total_amount">,
-  shareUrl: string
-): { ok: true } | { ok: false; reason: string } {
-  const phone = sanitizePhoneForWhatsapp(client.phone || "");
-  if (!phone) return { ok: false, reason: "Este cliente no tiene un teléfono guardado." };
-  const url = `https://wa.me/${phone}?text=${encodeURIComponent(messageText(invoice, shareUrl))}`;
-  openViaAnchor(url);
-  return { ok: true };
-}
+export type ShareResult = { method: "shared" } | { method: "cancelled" } | { method: "downloaded" };
 
 /**
- * Abre el cliente de email por defecto con un borrador ya redactado con el
- * enlace de descarga de la factura. El taxista revisa y pulsa enviar él
- * mismo.
+ * Comparte el PDF de la factura como archivo adjunto real, usando el panel
+ * nativo de "Compartir" del sistema (el usuario elige ahí WhatsApp, Gmail,
+ * Mail...). No se genera ni se manda ningún enlace: el PDF va adjunto tal
+ * cual. Si el navegador/dispositivo no soporta compartir archivos (típico en
+ * escritorio), se descarga el PDF para que el usuario lo adjunte a mano.
  */
-export function openEmailShare(
-  client: Client,
+export async function shareInvoicePdf(
+  pdfBlob: Blob,
   invoice: Pick<Invoice, "series" | "number" | "total_amount">,
-  shareUrl: string
-): { ok: true } | { ok: false; reason: string } {
-  if (!client.email) return { ok: false, reason: "Este cliente no tiene un email guardado." };
-  const subject = `Factura ${fullNumber(invoice)}`;
-  const url = `mailto:${encodeURIComponent(client.email)}?subject=${encodeURIComponent(
-    subject
-  )}&body=${encodeURIComponent(messageText(invoice, shareUrl))}`;
-  openViaAnchor(url);
-  return { ok: true };
+  client?: Pick<Client, "name">
+): Promise<ShareResult> {
+  const filename = `factura-${fullNumber(invoice)}.pdf`;
+  const file = new File([pdfBlob], filename, { type: "application/pdf" });
+  const text = `Factura nº ${fullNumber(invoice)} por importe de ${invoice.total_amount.toFixed(2)} €${
+    client ? ` para ${client.name}` : ""
+  }.`;
+
+  const canShareFiles =
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function" &&
+    typeof navigator.canShare === "function" &&
+    navigator.canShare({ files: [file] });
+
+  if (canShareFiles) {
+    try {
+      await navigator.share({ files: [file], title: `Factura ${fullNumber(invoice)}`, text });
+      return { method: "shared" };
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return { method: "cancelled" };
+      // Cualquier otro fallo al compartir cae al mismo fallback de descarga que sigue abajo.
+    }
+  }
+
+  downloadBlob(file, filename);
+  return { method: "downloaded" };
 }

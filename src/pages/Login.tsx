@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
+import { enterDemoMode } from "../lib/demoMode";
 
 export default function Login() {
   const { user, loading } = useAuth();
@@ -106,6 +107,13 @@ export default function Login() {
             {mode === "signin" ? "¿No tienes cuenta? Crear una" : "¿Ya tienes cuenta? Iniciar sesión"}
           </button>
         </div>
+
+        <button onClick={enterDemoMode} className="btn-secondary mt-4 w-full">
+          🚀 Probar demo (sin cuenta)
+        </button>
+        <p className="mt-2 text-center text-xs text-slate-400">
+          Entra directamente con datos de ejemplo. No hace falta registrarte y no se toca ningún dato real.
+        </p>
       </div>
     </div>
   );

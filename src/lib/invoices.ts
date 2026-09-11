@@ -1,6 +1,15 @@
 import { supabase } from "./supabaseClient";
 import type { Client, Invoice, InvoiceWithClient, Profile } from "../types";
 import { generateInvoicePdf } from "./pdf/generateInvoicePdf";
+import { isDemoMode } from "./demoMode";
+import {
+  getDemoInvoiceById,
+  getDemoPdfBytes,
+  insertDemoInvoice,
+  listDemoInvoices,
+  reserveDemoNumber,
+  setDemoCounter,
+} from "./demoStore";
 
 export function computeAmounts(base: number, ivaRate: number) {
   const ivaAmount = Math.round(base * ivaRate) / 100;
@@ -8,12 +17,20 @@ export function computeAmounts(base: number, ivaRate: number) {
   return { ivaAmount: Math.round(ivaAmount * 100) / 100, total };
 }
 
-export interface InvoiceCore {
+export interface ServiceDetails {
+  description: string;
+  service_origin: string;
+  service_destination: string;
+  service_time: string;
+  tariff_number: string;
+  supplements: string;
+}
+
+export interface InvoiceCore extends ServiceDetails {
   series: string;
   number: number;
   issue_date: string;
   service_date: string;
-  description: string;
   base_amount: number;
   iva_rate: number;
   iva_amount: number;
@@ -28,6 +45,7 @@ export interface InvoiceCore {
  * primero con un número provisional y sustituirlo después.
  */
 export async function reserveInvoiceNumber(series: string): Promise<number> {
+  if (isDemoMode()) return reserveDemoNumber(series);
   const { data: number, error } = await supabase.rpc("get_next_invoice_number", { p_series: series });
   if (error || number == null) throw new Error(error?.message ?? "No se pudo obtener el número de factura");
   return number as number;
@@ -39,7 +57,7 @@ export function buildInvoiceCore(
   baseAmount: number,
   ivaRate: number,
   serviceDate: string,
-  description: string
+  service: ServiceDetails
 ): InvoiceCore {
   const { ivaAmount, total } = computeAmounts(baseAmount, ivaRate);
   return {
@@ -47,7 +65,7 @@ export function buildInvoiceCore(
     number,
     issue_date: new Date().toISOString().slice(0, 10),
     service_date: serviceDate,
-    description,
+    ...service,
     base_amount: baseAmount,
     iva_rate: ivaRate,
     iva_amount: ivaAmount,
@@ -116,7 +134,7 @@ async function insertAndUploadInvoice(
 export interface CreateInvoiceInput {
   client: Client;
   serviceDate: string;
-  description: string;
+  service: ServiceDetails;
   baseAmount: number;
   ivaRate: number;
   /** PDF ya generado y firmado con certificado, con el número YA reservado con reserveInvoiceNumber(). */
@@ -132,12 +150,20 @@ export async function createInvoice(
 ): Promise<{ invoice: Invoice; pdfBytes: Uint8Array }> {
   const series = profile.invoice_series_prefix || String(new Date().getFullYear());
   const number = input.preAllocatedNumber ?? (await reserveInvoiceNumber(series));
-  const invoiceCore = buildInvoiceCore(series, number, input.baseAmount, input.ivaRate, input.serviceDate, input.description);
+  const invoiceCore = buildInvoiceCore(series, number, input.baseAmount, input.ivaRate, input.serviceDate, input.service);
+  const signedWithCertificate = Boolean(input.signedPdfBytes);
+
+  if (isDemoMode()) {
+    const pdfBytes =
+      input.signedPdfBytes ?? (await generateInvoicePdf({ profile, client: input.client, invoice: invoiceCore }));
+    const invoice = insertDemoInvoice(invoiceCore, { signed_with_certificate: signedWithCertificate }, input.client, pdfBytes);
+    return { invoice, pdfBytes };
+  }
 
   return insertAndUploadInvoice(
     userId,
     invoiceCore,
-    { signed_with_certificate: Boolean(input.signedPdfBytes) },
+    { signed_with_certificate: signedWithCertificate },
     input.client,
     input.signedPdfBytes ?? ((core) => generateInvoicePdf({ profile, client: input.client, invoice: core }))
   );
@@ -147,7 +173,7 @@ export interface CreateRectificationInput {
   originalInvoice: Invoice;
   client: Client;
   serviceDate: string;
-  description: string;
+  service: ServiceDetails;
   baseAmount: number;
   ivaRate: number;
   reason: string;
@@ -172,17 +198,32 @@ export async function createRectificationInvoice(
 ): Promise<{ invoice: Invoice; pdfBytes: Uint8Array }> {
   const series = rectificationSeries(profile);
   const number = input.preAllocatedNumber ?? (await reserveInvoiceNumber(series));
-  const invoiceCore = buildInvoiceCore(series, number, input.baseAmount, input.ivaRate, input.serviceDate, input.description);
+  const invoiceCore = buildInvoiceCore(series, number, input.baseAmount, input.ivaRate, input.serviceDate, input.service);
   const originalFullNumber = `${input.originalInvoice.series}-${String(input.originalInvoice.number).padStart(4, "0")}`;
+  const signedWithCertificate = Boolean(input.signedPdfBytes);
+  const extraColumns = {
+    signed_with_certificate: signedWithCertificate,
+    rectifies_invoice_id: input.originalInvoice.id,
+    rectification_reason: input.reason,
+  };
+
+  if (isDemoMode()) {
+    const pdfBytes =
+      input.signedPdfBytes ??
+      (await generateInvoicePdf({
+        profile,
+        client: input.client,
+        invoice: invoiceCore,
+        rectification: { originalFullNumber, reason: input.reason },
+      }));
+    const invoice = insertDemoInvoice(invoiceCore, extraColumns, input.client, pdfBytes);
+    return { invoice, pdfBytes };
+  }
 
   return insertAndUploadInvoice(
     userId,
     invoiceCore,
-    {
-      signed_with_certificate: Boolean(input.signedPdfBytes),
-      rectifies_invoice_id: input.originalInvoice.id,
-      rectification_reason: input.reason,
-    },
+    extraColumns,
     input.client,
     input.signedPdfBytes ??
       ((core) =>
@@ -196,6 +237,7 @@ export async function createRectificationInvoice(
 }
 
 export async function listInvoices(): Promise<InvoiceWithClient[]> {
+  if (isDemoMode()) return listDemoInvoices();
   const { data, error } = await supabase
     .from("invoices")
     .select("*, clients(*)")
@@ -205,12 +247,14 @@ export async function listInvoices(): Promise<InvoiceWithClient[]> {
 }
 
 export async function getInvoiceById(id: string): Promise<InvoiceWithClient> {
+  if (isDemoMode()) return getDemoInvoiceById(id);
   const { data, error } = await supabase.from("invoices").select("*, clients(*)").eq("id", id).single();
   if (error || !data) throw new Error(error?.message ?? "Factura no encontrada");
   return data as InvoiceWithClient;
 }
 
 export async function downloadInvoicePdf(pdfPath: string): Promise<Blob> {
+  if (isDemoMode()) return new Blob([getDemoPdfBytes(pdfPath) as BlobPart], { type: "application/pdf" });
   const { data, error } = await supabase.storage.from("invoices").download(pdfPath);
   if (error || !data) throw new Error(error?.message ?? "No se pudo descargar el PDF");
   return data;
@@ -222,16 +266,7 @@ export async function downloadInvoicePdf(pdfPath: string): Promise<Blob> {
  * No permite fijarlo por debajo del número más alto ya emitido en esa serie.
  */
 export async function setInvoiceCounter(series: string, nextNumber: number): Promise<void> {
+  if (isDemoMode()) return setDemoCounter(series, nextNumber - 1);
   const { error } = await supabase.rpc("set_invoice_counter", { p_series: series, p_last_number: nextNumber - 1 });
   if (error) throw new Error(error.message);
-}
-
-/**
- * URL firmada (temporal, sin necesidad de sesión) para compartir el PDF de
- * una factura por WhatsApp o email. Válida 90 días.
- */
-export async function getInvoiceShareUrl(pdfPath: string): Promise<string> {
-  const { data, error } = await supabase.storage.from("invoices").createSignedUrl(pdfPath, 60 * 60 * 24 * 90);
-  if (error || !data) throw new Error(error?.message ?? "No se pudo generar el enlace para compartir");
-  return data.signedUrl;
 }

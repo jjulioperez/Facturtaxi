@@ -40,6 +40,11 @@ export interface Invoice {
   issue_date: string;
   service_date: string;
   description: string;
+  service_origin: string | null;
+  service_destination: string | null;
+  service_time: string | null;
+  tariff_number: string | null;
+  supplements: string | null;
   base_amount: number;
   iva_rate: number;
   iva_amount: number;

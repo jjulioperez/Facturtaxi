@@ -6,10 +6,50 @@ export interface InvoiceData {
   client: Client;
   invoice: Pick<
     Invoice,
-    "series" | "number" | "issue_date" | "service_date" | "description" | "base_amount" | "iva_rate" | "iva_amount" | "total_amount"
+    | "series"
+    | "number"
+    | "issue_date"
+    | "service_date"
+    | "description"
+    | "service_origin"
+    | "service_destination"
+    | "service_time"
+    | "tariff_number"
+    | "supplements"
+    | "base_amount"
+    | "iva_rate"
+    | "iva_amount"
+    | "total_amount"
   >;
   /** Presente cuando esta factura es una rectificativa de otra anterior. */
   rectification?: { originalFullNumber: string; reason: string };
+  /**
+   * true cuando este PDF se va a firmar (o ya se ha firmado) con certificado
+   * digital: dibuja un sello visible "firmado electrónicamente" en vez de la
+   * imagen de firma manual. Debe pasarse ANTES de firmar (el contenido
+   * visual forma parte del documento que se firma).
+   */
+  signedWithCertificate?: boolean;
+}
+
+function buildConceptLines(invoice: InvoiceData["invoice"]): string[] {
+  const lines: string[] = [];
+  const hasRoute = Boolean(invoice.service_origin || invoice.service_destination);
+  if (hasRoute) {
+    lines.push([invoice.service_origin, invoice.service_destination].filter(Boolean).join(" - "));
+  } else {
+    lines.push(invoice.description || "Servicio de transporte (taxi)");
+  }
+
+  const meta: string[] = [];
+  if (invoice.service_time) meta.push(`Hora: ${invoice.service_time}`);
+  if (invoice.tariff_number) meta.push(`Tarifa: ${invoice.tariff_number}`);
+  if (meta.length) lines.push(meta.join("   "));
+
+  if (invoice.supplements) lines.push(`Suplementos: ${invoice.supplements}`);
+  if (hasRoute && invoice.description) lines.push(invoice.description);
+
+  return lines;
 }
 
 function hexToRgb(hex: string) {
@@ -222,8 +262,9 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array>
   });
 
   const bodyTop = tableTop - rowHeight;
-  const description = invoice.description || "Servicio de transporte (taxi)";
-  const descriptionLines = wrapText(fontRegular, description, 10.5, colX[1] - colX[0] - 10);
+  const descriptionLines = buildConceptLines(invoice).flatMap((line) =>
+    wrapText(fontRegular, line, 10.5, colX[1] - colX[0] - 10)
+  );
   descriptionLines.forEach((line, i) => {
     page.drawText(line, {
       x: colX[0],
@@ -304,31 +345,70 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Uint8Array>
     });
   }
 
-  const signature = await embedImageSmart(doc, profile.signature_url);
-  if (signature) {
-    const maxW = 150;
-    const maxH = 70;
-    const scale = Math.min(maxW / signature.width, maxH / signature.height, 1);
-    const x = pageWidth - margin - signature.width * scale;
-    page.drawImage(signature, {
-      x,
-      y: footerY + 10,
-      width: signature.width * scale,
-      height: signature.height * scale,
+  if (data.signedWithCertificate) {
+    const boxW = 230;
+    const boxH = 74;
+    const boxX = pageWidth - margin - boxW;
+    const boxY = footerY - 4;
+    page.drawRectangle({
+      x: boxX,
+      y: boxY,
+      width: boxW,
+      height: boxH,
+      borderColor: accent,
+      borderWidth: 1,
+      color: rgb(1, 1, 1),
     });
-    page.drawLine({
-      start: { x, y: footerY + 8 },
-      end: { x: pageWidth - margin, y: footerY + 8 },
-      thickness: 0.75,
-      color: rgb(0.7, 0.7, 0.7),
-    });
-    page.drawText("Firma", {
-      x,
-      y: footerY - 6,
-      size: 9,
-      font: fontRegular,
-      color: rgb(0.5, 0.5, 0.5),
-    });
+    const now = new Date();
+    const timestamp = `${formatDate(invoice.issue_date)} ${String(now.getHours()).padStart(2, "0")}:${String(
+      now.getMinutes()
+    ).padStart(2, "0")}`;
+    const stampLines: { text: string; bold?: boolean }[] = [
+      { text: "Firmado electrónicamente", bold: true },
+      { text: "con certificado digital", bold: true },
+      { text: profile.company_name || "" },
+      ...(profile.tax_id ? [{ text: `NIF/CIF: ${profile.tax_id}` }] : []),
+      { text: timestamp },
+    ];
+    let stampY = boxY + boxH - 16;
+    for (const line of stampLines) {
+      if (!line.text) continue;
+      page.drawText(line.text, {
+        x: boxX + 10,
+        y: stampY,
+        size: line.bold ? 9.5 : 8.5,
+        font: line.bold ? fontBold : fontRegular,
+        color: line.bold ? accent : rgb(0.3, 0.3, 0.3),
+      });
+      stampY -= 12;
+    }
+  } else {
+    const signature = await embedImageSmart(doc, profile.signature_url);
+    if (signature) {
+      const maxW = 150;
+      const maxH = 70;
+      const scale = Math.min(maxW / signature.width, maxH / signature.height, 1);
+      const x = pageWidth - margin - signature.width * scale;
+      page.drawImage(signature, {
+        x,
+        y: footerY + 10,
+        width: signature.width * scale,
+        height: signature.height * scale,
+      });
+      page.drawLine({
+        start: { x, y: footerY + 8 },
+        end: { x: pageWidth - margin, y: footerY + 8 },
+        thickness: 0.75,
+        color: rgb(0.7, 0.7, 0.7),
+      });
+      page.drawText("Firma", {
+        x,
+        y: footerY - 6,
+        size: 9,
+        font: fontRegular,
+        color: rgb(0.5, 0.5, 0.5),
+      });
+    }
   }
 
   page.drawText("Generado con Facturtaxi", {
