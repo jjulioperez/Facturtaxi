@@ -5,11 +5,14 @@ import { useProfile } from "../context/ProfileContext";
 import { useCertificate } from "../context/CertificateContext";
 import { listClients, createClient } from "../lib/clients";
 import {
+  buildInvoiceCore,
   computeAmounts,
   createInvoice,
   createRectificationInvoice,
   getInvoiceById,
   getInvoiceShareUrl,
+  rectificationSeries,
+  reserveInvoiceNumber,
 } from "../lib/invoices";
 import { generateInvoicePdf } from "../lib/pdf/generateInvoicePdf";
 import { signPdfWithCertificate } from "../lib/pdf/signPdf";
@@ -136,7 +139,7 @@ export default function NewInvoice() {
     }
   }
 
-  async function finishInvoice(client: Client, signedPdfBytes?: Uint8Array) {
+  async function finishInvoice(client: Client, signedPdfBytes?: Uint8Array, preAllocatedNumber?: number) {
     if (!user || !profile) return;
     setBusy(true);
     setError(null);
@@ -151,6 +154,7 @@ export default function NewInvoice() {
             ivaRate,
             reason: rectifyReason,
             signedPdfBytes,
+            preAllocatedNumber,
           })
         : await createInvoice(user.id, profile, {
             client,
@@ -159,6 +163,7 @@ export default function NewInvoice() {
             baseAmount,
             ivaRate,
             signedPdfBytes,
+            preAllocatedNumber,
           });
       const blob = new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
       setFinalPdfUrl(URL.createObjectURL(blob));
@@ -178,22 +183,27 @@ export default function NewInvoice() {
     setBusy(true);
     setError(null);
     try {
-      const draftInvoice = {
-        series: profile.invoice_series_prefix,
-        number: 0,
-        issue_date: new Date().toISOString().slice(0, 10),
-        service_date: serviceDate,
-        description,
-        base_amount: baseAmount,
-        iva_rate: ivaRate,
-        iva_amount: ivaAmount,
-        total_amount: total,
-      };
-      const unsignedPdf = await generateInvoicePdf({ profile, client, invoice: draftInvoice });
+      // El número tiene que reservarse y quedar fijado en el PDF ANTES de
+      // firmarlo: firmar "bloquea" el contenido, así que no se puede generar
+      // con un número provisional y sustituirlo después de conocer el real.
+      const series = rectifyOriginal ? rectificationSeries(profile) : profile.invoice_series_prefix;
+      const number = await reserveInvoiceNumber(series);
+      const draftInvoice = buildInvoiceCore(series, number, baseAmount, ivaRate, serviceDate, description);
+      const unsignedPdf = await generateInvoicePdf({
+        profile,
+        client,
+        invoice: draftInvoice,
+        rectification: rectifyOriginal
+          ? {
+              originalFullNumber: `${rectifyOriginal.series}-${String(rectifyOriginal.number).padStart(4, "0")}`,
+              reason: rectifyReason,
+            }
+          : undefined,
+      });
       const certBytes = await file.arrayBuffer();
       const signedPdf = await signPdfWithCertificate(unsignedPdf, certBytes, password);
       setCertificate(file, password);
-      await finishInvoice(client, signedPdf);
+      await finishInvoice(client, signedPdf, number);
     } catch (err) {
       setError(
         err instanceof Error

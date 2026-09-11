@@ -8,7 +8,7 @@ export function computeAmounts(base: number, ivaRate: number) {
   return { ivaAmount: Math.round(ivaAmount * 100) / 100, total };
 }
 
-interface InvoiceCore {
+export interface InvoiceCore {
   series: string;
   number: number;
   issue_date: string;
@@ -21,36 +21,31 @@ interface InvoiceCore {
 }
 
 /**
- * Pide el siguiente número correlativo de una serie (vía RPC atómica) y crea
- * la fila de la factura ANTES de generar/subir el PDF: así, si algo falla
- * generando o subiendo el PDF, el número ya queda registrado en una factura
- * real (sin huecos en la numeración) y el PDF se puede reintentar más tarde.
+ * Reserva atómicamente el siguiente número correlativo de una serie. Debe
+ * llamarse ANTES de generar el PDF final: si el PDF se va a firmar con
+ * certificado, el número tiene que estar ya fijado en el documento antes de
+ * firmarlo (firmar "bloquea" el contenido), así que nunca se puede generar
+ * primero con un número provisional y sustituirlo después.
  */
-async function insertAndUploadInvoice(
-  userId: string,
+export async function reserveInvoiceNumber(series: string): Promise<number> {
+  const { data: number, error } = await supabase.rpc("get_next_invoice_number", { p_series: series });
+  if (error || number == null) throw new Error(error?.message ?? "No se pudo obtener el número de factura");
+  return number as number;
+}
+
+export function buildInvoiceCore(
   series: string,
-  extraColumns: Record<string, unknown>,
+  number: number,
   baseAmount: number,
   ivaRate: number,
   serviceDate: string,
-  description: string,
-  client: Client,
-  pdfBytesOrGenerator: Uint8Array | ((core: InvoiceCore) => Promise<Uint8Array>)
-): Promise<{ invoice: Invoice; pdfBytes: Uint8Array }> {
-  const { data: number, error: rpcError } = await supabase.rpc("get_next_invoice_number", {
-    p_series: series,
-  });
-  if (rpcError || number == null) {
-    throw new Error(rpcError?.message ?? "No se pudo obtener el número de factura");
-  }
-
+  description: string
+): InvoiceCore {
   const { ivaAmount, total } = computeAmounts(baseAmount, ivaRate);
-  const issueDate = new Date().toISOString().slice(0, 10);
-
-  const invoiceCore: InvoiceCore = {
+  return {
     series,
-    number: number as number,
-    issue_date: issueDate,
+    number,
+    issue_date: new Date().toISOString().slice(0, 10),
     service_date: serviceDate,
     description,
     base_amount: baseAmount,
@@ -58,7 +53,20 @@ async function insertAndUploadInvoice(
     iva_amount: ivaAmount,
     total_amount: total,
   };
+}
 
+/**
+ * Crea la fila de la factura (con un número ya reservado) ANTES de subir el
+ * PDF: así, si falla la subida, el número queda registrado en una factura
+ * real (sin huecos en la numeración) y el PDF se puede reintentar luego.
+ */
+async function insertAndUploadInvoice(
+  userId: string,
+  invoiceCore: InvoiceCore,
+  extraColumns: Record<string, unknown>,
+  client: Client,
+  pdfBytesOrGenerator: Uint8Array | ((core: InvoiceCore) => Promise<Uint8Array>)
+): Promise<{ invoice: Invoice; pdfBytes: Uint8Array }> {
   const { data: inserted, error: insertError } = await supabase
     .from("invoices")
     .insert({
@@ -70,12 +78,14 @@ async function insertAndUploadInvoice(
     })
     .select("*")
     .single();
-  if (insertError) throw new Error(`No se pudo guardar la factura (número ${number}): ${insertError.message}`);
+  if (insertError) {
+    throw new Error(`No se pudo guardar la factura (número ${invoiceCore.number}): ${insertError.message}`);
+  }
 
   const pdfBytes =
     typeof pdfBytesOrGenerator === "function" ? await pdfBytesOrGenerator(invoiceCore) : pdfBytesOrGenerator;
 
-  const fullNumber = `${series}-${String(number).padStart(4, "0")}`;
+  const fullNumber = `${invoiceCore.series}-${String(invoiceCore.number).padStart(4, "0")}`;
   const pdfPath = `${userId}/factura-${fullNumber}.pdf`;
 
   // upsert: true a propósito. La ruta es determinista a partir de
@@ -109,7 +119,10 @@ export interface CreateInvoiceInput {
   description: string;
   baseAmount: number;
   ivaRate: number;
+  /** PDF ya generado y firmado con certificado, con el número YA reservado con reserveInvoiceNumber(). */
   signedPdfBytes?: Uint8Array;
+  /** Obligatorio si se pasa signedPdfBytes: el número que ya se usó al generar/firmar ese PDF. */
+  preAllocatedNumber?: number;
 }
 
 export async function createInvoice(
@@ -118,15 +131,13 @@ export async function createInvoice(
   input: CreateInvoiceInput
 ): Promise<{ invoice: Invoice; pdfBytes: Uint8Array }> {
   const series = profile.invoice_series_prefix || String(new Date().getFullYear());
+  const number = input.preAllocatedNumber ?? (await reserveInvoiceNumber(series));
+  const invoiceCore = buildInvoiceCore(series, number, input.baseAmount, input.ivaRate, input.serviceDate, input.description);
 
   return insertAndUploadInvoice(
     userId,
-    series,
+    invoiceCore,
     { signed_with_certificate: Boolean(input.signedPdfBytes) },
-    input.baseAmount,
-    input.ivaRate,
-    input.serviceDate,
-    input.description,
     input.client,
     input.signedPdfBytes ?? ((core) => generateInvoicePdf({ profile, client: input.client, invoice: core }))
   );
@@ -141,6 +152,12 @@ export interface CreateRectificationInput {
   ivaRate: number;
   reason: string;
   signedPdfBytes?: Uint8Array;
+  preAllocatedNumber?: number;
+}
+
+/** Serie usada para las facturas rectificativas: "R" + la serie normal. */
+export function rectificationSeries(profile: Profile): string {
+  return `R${profile.invoice_series_prefix || String(new Date().getFullYear())}`;
 }
 
 /**
@@ -153,22 +170,19 @@ export async function createRectificationInvoice(
   profile: Profile,
   input: CreateRectificationInput
 ): Promise<{ invoice: Invoice; pdfBytes: Uint8Array }> {
-  const baseSeries = profile.invoice_series_prefix || String(new Date().getFullYear());
-  const series = `R${baseSeries}`;
+  const series = rectificationSeries(profile);
+  const number = input.preAllocatedNumber ?? (await reserveInvoiceNumber(series));
+  const invoiceCore = buildInvoiceCore(series, number, input.baseAmount, input.ivaRate, input.serviceDate, input.description);
   const originalFullNumber = `${input.originalInvoice.series}-${String(input.originalInvoice.number).padStart(4, "0")}`;
 
   return insertAndUploadInvoice(
     userId,
-    series,
+    invoiceCore,
     {
       signed_with_certificate: Boolean(input.signedPdfBytes),
       rectifies_invoice_id: input.originalInvoice.id,
       rectification_reason: input.reason,
     },
-    input.baseAmount,
-    input.ivaRate,
-    input.serviceDate,
-    input.description,
     input.client,
     input.signedPdfBytes ??
       ((core) =>
