@@ -7,8 +7,11 @@ import { ProfileProvider, useProfile } from "./src/context/ProfileContext";
 import { supabase } from "./src/lib/supabaseClient";
 import LoginScreen from "./src/screens/LoginScreen";
 import PendingApprovalScreen from "./src/screens/PendingApprovalScreen";
+import DashboardScreen from "./src/screens/DashboardScreen";
 import NewInvoiceScreen from "./src/screens/NewInvoiceScreen";
 import InvoiceHistoryScreen from "./src/screens/InvoiceHistoryScreen";
+import ClientsScreen from "./src/screens/ClientsScreen";
+import TemplateScreen from "./src/screens/TemplateScreen";
 import Spinner from "./src/components/Spinner";
 import { colors } from "./src/theme";
 
@@ -33,14 +36,49 @@ function MainTabs() {
       }}
     >
       <Tab.Screen
+        name="Inicio"
+        component={DashboardScreen}
+        options={{
+          title: "Inicio",
+          tabBarLabel: "Inicio",
+          tabBarIcon: ({ color, size }) => <Text style={{ fontSize: size, color }}>🏠</Text>,
+        }}
+      />
+      <Tab.Screen
         name="NuevaFactura"
         component={NewInvoiceScreen}
-        options={{ title: "Nueva factura", tabBarLabel: "🧾 Nueva" }}
+        options={{
+          title: "Nueva factura",
+          tabBarLabel: "Nueva",
+          tabBarIcon: ({ color, size }) => <Text style={{ fontSize: size, color }}>🧾</Text>,
+        }}
       />
       <Tab.Screen
         name="Historial"
         component={InvoiceHistoryScreen}
-        options={{ title: "Historial", tabBarLabel: "📂 Historial" }}
+        options={{
+          title: "Historial",
+          tabBarLabel: "Historial",
+          tabBarIcon: ({ color, size }) => <Text style={{ fontSize: size, color }}>📂</Text>,
+        }}
+      />
+      <Tab.Screen
+        name="Clientes"
+        component={ClientsScreen}
+        options={{
+          title: "Clientes",
+          tabBarLabel: "Clientes",
+          tabBarIcon: ({ color, size }) => <Text style={{ fontSize: size, color }}>👤</Text>,
+        }}
+      />
+      <Tab.Screen
+        name="Plantilla"
+        component={TemplateScreen}
+        options={{
+          title: "Plantilla",
+          tabBarLabel: "Plantilla",
+          tabBarIcon: ({ color, size }) => <Text style={{ fontSize: size, color }}>🎨</Text>,
+        }}
       />
     </Tab.Navigator>
   );

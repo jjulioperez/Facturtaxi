@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import Share from "react-native-share";
+import { sharePdfBase64 } from "../lib/shareFile";
 import { pick } from "@react-native-documents/picker";
 import { useAuth } from "../context/AuthContext";
 import { useProfile } from "../context/ProfileContext";
@@ -197,12 +197,7 @@ export default function NewInvoiceScreen() {
     try {
       const base64 = Buffer.from(finalPdfBytes).toString("base64");
       const label = `${finalInvoice.series}-${String(finalInvoice.number).padStart(4, "0")}`;
-      await Share.open({
-        url: `data:application/pdf;base64,${base64}`,
-        type: "application/pdf",
-        filename: `factura-${label}`,
-        failOnCancel: false,
-      });
+      await sharePdfBase64(base64, `factura-${label}`);
     } catch (err) {
       if (err instanceof Error && !/user did not share/i.test(err.message)) {
         setError(err.message);

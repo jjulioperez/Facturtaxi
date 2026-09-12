@@ -27,6 +27,7 @@
     "react": "19.2.3",
     "react-native": "0.87.1",
     "react-native-config": "^1.7.2",
+    "react-native-fs": "^2.20.0",
     "react-native-get-random-values": "^2.0.0",
     "react-native-safe-area-context": "^5.9.1",
     "react-native-screens": "^4.27.0",
